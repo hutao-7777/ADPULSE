@@ -27,7 +27,7 @@ jobs:
       - name: Run pytest
         run: |
           export PYTHONPATH=$(pwd)
-          pytest tests/test_api.py -v
+          pytest tests/ -v
 
   frontend:
     runs-on: ubuntu-latest
