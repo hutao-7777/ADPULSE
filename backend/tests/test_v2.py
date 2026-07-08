@@ -325,3 +325,116 @@ async def test_ab_v2_status_transition_validation(client):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert bad.status_code == 400
+
+
+async def test_attribution_v2_journey_lifecycle(client):
+    admin = await _login_admin(client)
+    token = admin["access_token"]
+    campaign_id = str(uuid.uuid4())
+
+    create_resp = await client.post(
+        "/api/v2/attribution/journeys",
+        json={
+            "user_id": "user-journey-1",
+            "touchpoints": [
+                {
+                    "channel": "search_ads",
+                    "campaign_id": campaign_id,
+                    "timestamp": "2024-01-15T10:00:00Z",
+                    "cost": 2.50,
+                    "metadata": {"keyword": "buy shoes"},
+                },
+                {
+                    "channel": "social_media",
+                    "campaign_id": campaign_id,
+                    "timestamp": "2024-01-16T14:30:00Z",
+                    "cost": 1.20,
+                    "metadata": {"platform": "instagram"},
+                },
+                {
+                    "channel": "email",
+                    "campaign_id": campaign_id,
+                    "timestamp": "2024-01-18T09:00:00Z",
+                    "cost": 0.30,
+                    "metadata": {"campaign_name": "flash_sale"},
+                },
+            ],
+            "conversion": {
+                "timestamp": "2024-01-18T15:00:00Z",
+                "value": 150.00,
+                "currency": "USD",
+            },
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert create_resp.status_code == 201
+    journey = _unwrap(create_resp)
+    assert journey["user_id"] == "user-journey-1"
+    assert len(journey["touchpoints"]) == 3
+    journey_id = journey["journey_id"]
+
+    # Invalid channel
+    invalid_channel = await client.post(
+        "/api/v2/attribution/journeys",
+        json={
+            "user_id": "u1",
+            "touchpoints": [
+                {
+                    "channel": "invalid_channel",
+                    "campaign_id": campaign_id,
+                    "timestamp": "2024-01-15T10:00:00Z",
+                }
+            ],
+            "conversion": {
+                "timestamp": "2024-01-16T10:00:00Z",
+                "value": 10.0,
+            },
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert invalid_channel.status_code == 422
+
+    # Conversion before last touchpoint
+    invalid_time = await client.post(
+        "/api/v2/attribution/journeys",
+        json={
+            "user_id": "u1",
+            "touchpoints": [
+                {
+                    "channel": "search_ads",
+                    "campaign_id": campaign_id,
+                    "timestamp": "2024-01-15T10:00:00Z",
+                }
+            ],
+            "conversion": {
+                "timestamp": "2024-01-14T10:00:00Z",
+                "value": 10.0,
+            },
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert invalid_time.status_code == 422
+
+    # Compute attribution
+    compute = await client.post(
+        f"/api/v2/attribution/journeys/{journey_id}/compute",
+        json={"models": ["first_touch", "last_touch", "linear", "shapley"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert compute.status_code == 200
+    data = _unwrap(compute)
+    assert data["journey_id"] == journey_id
+    assert set(data["models"].keys()) == {
+        "first_touch",
+        "last_touch",
+        "linear",
+        "shapley",
+    }
+
+    # Missing journey
+    missing = await client.post(
+        f"/api/v2/attribution/journeys/{uuid.uuid4()}/compute",
+        json={},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert missing.status_code == 404

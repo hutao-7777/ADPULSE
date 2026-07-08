@@ -109,11 +109,13 @@ class AttributionV2Engine:
         conversion_value: float,
         click_window_days: int = 7,
         view_window_days: int = 1,
+        conversion_time: datetime | None = None,
+        time_decay_halflife_hours: float = 168.0,
     ) -> Dict[str, Dict[str, float]]:
         """Compute attribution credits using multiple models."""
         filtered = self._filter_by_window(
             touchpoints,
-            datetime.now(),
+            conversion_time or datetime.now(),
             click_window_days,
             view_window_days,
         )
@@ -137,13 +139,14 @@ class AttributionV2Engine:
         for tp in filtered:
             channel_credits["linear"][tp.channel] += share
 
-        # Time decay (half-life 7 days)
+        # Time decay (configurable half-life)
         channel_credits["time_decay"] = defaultdict(float)
         max_time = max(tp.event_time for tp in filtered)
+        halflife_days = time_decay_halflife_hours / 24.0
         weights = []
         for tp in filtered:
             days_ago = (max_time - tp.event_time).total_seconds() / 86400.0
-            weight = 2 ** (-days_ago / 7.0)
+            weight = 2 ** (-days_ago / halflife_days) if halflife_days > 0 else 1.0
             weights.append(weight)
         total_weight = sum(weights)
         for tp, weight in zip(filtered, weights):

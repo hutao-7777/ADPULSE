@@ -872,6 +872,9 @@ class Touchpoint(Base):
         index=True,
     )
     cost: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    metadata_: Mapped[dict] = mapped_column(
+        "metadata", JSON, default=dict, nullable=False
+    )
 
     campaign: Mapped["Campaign"] = relationship(
         "Campaign", back_populates="touchpoints"
