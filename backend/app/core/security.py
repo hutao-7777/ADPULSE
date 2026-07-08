@@ -189,15 +189,12 @@ async def validate_api_key(
         .where(ApiKey.key_prefix == prefix)
         .where(ApiKey.is_active == True)  # noqa: E712
     )
-    key_record = result.scalar_one_or_none()
+    candidates = list(result.scalars().all())
+    key_record = next(
+        (k for k in candidates if verify_password(api_key, k.key_hash)), None
+    )
 
     if key_record is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key",
-        )
-
-    if not verify_password(api_key, key_record.key_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key",

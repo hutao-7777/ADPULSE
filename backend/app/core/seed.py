@@ -106,7 +106,7 @@ async def _seed_auth(session: AsyncSession) -> None:
         .values(
             {
                 "id": admin_id,
-                "email": "admin@adpulse.local",
+                "email": "admin@example.com",
                 "hashed_password": get_password_hash("admin123"),
                 "full_name": "Demo Admin",
                 "is_active": True,

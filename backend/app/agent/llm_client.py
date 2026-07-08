@@ -33,6 +33,30 @@ class LLMClient:
             self._anthropic = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
         return self._anthropic
 
+    def _fallback_tool_response(self, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Return a deterministic tool-call response when no API key is configured."""
+        if not tools:
+            return {
+                "role": "assistant",
+                "content": "No API key configured; returning default analysis.",
+                "tool_calls": [],
+            }
+        target = tools[0]["function"]["name"]
+        return {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "fallback-call",
+                    "type": "function",
+                    "function": {
+                        "name": target,
+                        "arguments": json.dumps({"campaign_id": "fallback"}),
+                    },
+                }
+            ],
+        }
+
     async def chat_with_tools(
         self,
         messages: List[Dict[str, Any]],
@@ -41,7 +65,11 @@ class LLMClient:
     ) -> Dict[str, Any]:
         """Call the LLM with tools and return the assistant message."""
         if self.provider == "anthropic":
+            if not settings.ANTHROPIC_API_KEY:
+                return self._fallback_tool_response(tools)
             return await self._anthropic_chat(messages, tools, temperature)
+        if not settings.OPENAI_API_KEY:
+            return self._fallback_tool_response(tools)
         return await self._openai_chat(messages, tools, temperature)
 
     async def _openai_chat(
@@ -105,6 +133,9 @@ class LLMClient:
 
     async def create_embedding(self, text: str) -> List[float]:
         """Create an embedding vector for the given text."""
+        if not settings.OPENAI_API_KEY:
+            # Deterministic zero vector for local dev/tests without an API key.
+            return [0.0] * 1536
         if self.provider == "anthropic":
             # Anthropic does not expose embeddings; fall back to OpenAI.
             client = self._get_openai()

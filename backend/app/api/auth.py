@@ -2,6 +2,7 @@
 
 from fastapi import Depends, status
 from pydantic import BaseModel, EmailStr
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -49,6 +50,7 @@ class ApiKeyResponse(BaseModel):
     id: str
     name: str
     key_prefix: str
+    key: str | None = None
     scopes: list[str]
     rate_limit_rps: int
     is_active: bool
@@ -120,7 +122,8 @@ async def list_api_keys(
     current_user: User = Depends(get_current_active_user),
 ) -> list[dict]:
     """List API keys owned by the current user."""
-    keys = [k for k in current_user.api_keys]
+    result = await db.execute(select(ApiKey).where(ApiKey.user_id == current_user.id))
+    keys = list(result.scalars().all())
     return [
         {
             "id": str(k.id),
