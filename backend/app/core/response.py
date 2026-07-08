@@ -2,12 +2,13 @@
 
 import json
 import logging
-from typing import Any, Generic, Optional, TypeVar
+from typing import Any, Generic, Optional, TypeVar, cast
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import HTTPException, RequestValidationError
 from fastapi.responses import JSONResponse
-from fastapi.routing import APIRoute, APIRouter as FastAPIRouter
+from fastapi.routing import APIRoute
+from fastapi.routing import APIRouter as FastAPIRouter
 from pydantic import BaseModel
 
 from app.core.exceptions import AdPulseException
@@ -58,14 +59,19 @@ class WrappedAPIRoute(APIRoute):
                         return response
 
                     # Already wrapped; avoid double wrapping.
-                    if (
-                        isinstance(payload, dict)
-                        and set(payload.keys()) == {"code", "message", "data"}
-                    ):
+                    if isinstance(payload, dict) and set(payload.keys()) == {
+                        "code",
+                        "message",
+                        "data",
+                    }:
                         return response
 
                     wrapped = ApiResponse.success(payload)
-                    headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+                    headers = {
+                        k: v
+                        for k, v in response.headers.items()
+                        if k.lower() != "content-length"
+                    }
                     return JSONResponse(
                         content=wrapped,
                         status_code=response.status_code,
@@ -94,27 +100,31 @@ APIRouter = WrappedAPIRouter
 # Exception handlers
 # ------------------------------------------------------------------
 
-async def adpulse_exception_handler(_request: Request, exc: AdPulseException):
+
+async def adpulse_exception_handler(_request: Request, exc: Exception):
+    ad_exc = cast(AdPulseException, exc)
     return JSONResponse(
-        status_code=exc.status_code,
-        content=ApiResponse.error(exc.code, exc.message),
+        status_code=ad_exc.status_code,
+        content=ApiResponse.error(ad_exc.code, ad_exc.message),
     )
 
 
-async def http_exception_handler(_request: Request, exc: HTTPException):
+async def http_exception_handler(_request: Request, exc: Exception):
+    http_exc = cast(HTTPException, exc)
     return JSONResponse(
-        status_code=exc.status_code,
-        content=ApiResponse.error(exc.status_code, exc.detail),
+        status_code=http_exc.status_code,
+        content=ApiResponse.error(http_exc.status_code, http_exc.detail),
     )
 
 
-async def validation_exception_handler(_request: Request, exc: RequestValidationError):
+async def validation_exception_handler(_request: Request, exc: Exception):
+    val_exc = cast(RequestValidationError, exc)
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=ApiResponse.error(
             422,
             "请求参数校验失败",
-            exc.errors(),
+            val_exc.errors(),
         ),
     )
 

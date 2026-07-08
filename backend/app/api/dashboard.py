@@ -4,11 +4,11 @@ from datetime import datetime, timedelta, timezone
 from typing import List
 
 from fastapi import Depends, Query
-from app.core.response import APIRouter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.response import APIRouter
 from app.models.models import Auction
 from app.schemas.dashboard import RTBSummary, TrendPoint, WinRateTrend
 
@@ -30,7 +30,9 @@ async def get_dashboard_summary() -> dict:
 @router.get("/rtb-summary", response_model=RTBSummary)
 async def get_rtb_summary(db: AsyncSession = Depends(get_db)) -> RTBSummary:
     """Aggregate RTB metrics for today."""
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
 
     total_result = await db.execute(
         select(func.count(Auction.id)).where(Auction.created_at >= today_start)
@@ -52,8 +54,7 @@ async def get_rtb_summary(db: AsyncSession = Depends(get_db)) -> RTBSummary:
     avg_winning_bid = avg_result.scalar() or 0.0
 
     latency_result = await db.execute(
-        select(func.avg(Auction.latency_ms))
-        .where(Auction.created_at >= today_start)
+        select(func.avg(Auction.latency_ms)).where(Auction.created_at >= today_start)
     )
     avg_latency = latency_result.scalar() or 0.0
 
@@ -78,7 +79,9 @@ async def get_win_rate_trend(
     if period == "24h":
         start = now - timedelta(hours=24)
         group_expr = func.strftime("%Y-%m-%d %H:00", Auction.created_at)
-        labels = [(start + timedelta(hours=i)).strftime("%Y-%m-%d %H:00") for i in range(25)]
+        labels = [
+            (start + timedelta(hours=i)).strftime("%Y-%m-%d %H:00") for i in range(25)
+        ]
     else:
         start = now - timedelta(days=7)
         group_expr = func.strftime("%Y-%m-%d", Auction.created_at)
@@ -108,9 +111,7 @@ async def get_win_rate_trend(
             auctions_subq.c.cnt.label("auctions"),
             func.coalesce(wins_subq.c.cnt, 0).label("wins"),
             func.coalesce(wins_subq.c.avg_bid, 0.0).label("avg_bid"),
-        ).outerjoin(
-            wins_subq, auctions_subq.c.bucket == wins_subq.c.bucket
-        )
+        ).outerjoin(wins_subq, auctions_subq.c.bucket == wins_subq.c.bucket)
     )
 
     rows = {row.bucket: row for row in result.all()}

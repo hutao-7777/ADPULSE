@@ -5,11 +5,11 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, HTTPException, status
-from app.core.response import APIRouter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.response import APIRouter
 from app.models.models import AttributionResult, ConversionEvent, Touchpoint
 from app.schemas.attribution import (
     AttributionCalculateRequest,
@@ -37,7 +37,9 @@ def _get_engine() -> AttributionEngine:
     return _engine
 
 
-@router.post("/journey", response_model=TouchpointResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/journey", response_model=TouchpointResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_touchpoint(
     request: TouchpointCreate,
     db: AsyncSession = Depends(get_db),
@@ -45,7 +47,10 @@ async def create_touchpoint(
     """Create a new touchpoint in a user's journey."""
     campaign_uuid = _as_uuid(request.campaign_id)
     if campaign_uuid is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid campaign_id")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid campaign_id",
+        )
 
     # Compute next sequence number
     count_result = await db.execute(
@@ -95,7 +100,10 @@ async def get_user_journey(
     """Return the full touchpoint journey for a user in a campaign."""
     campaign_uuid = _as_uuid(campaign_id)
     if campaign_uuid is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid campaign_id")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid campaign_id",
+        )
 
     result = await db.execute(
         select(Touchpoint)
@@ -114,7 +122,10 @@ async def record_conversion(
     """Record a conversion event and link recent unassigned touchpoints."""
     campaign_uuid = _as_uuid(request.campaign_id)
     if campaign_uuid is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid campaign_id")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid campaign_id",
+        )
 
     creative_uuid = _as_uuid(request.creative_id) if request.creative_id else None
 
@@ -146,7 +157,9 @@ async def record_conversion(
     return {"id": str(conversion.id), "status": "recorded"}
 
 
-@router.post("/calculate/{user_id}/{campaign_id}", response_model=AttributionCompareResponse)
+@router.post(
+    "/calculate/{user_id}/{campaign_id}", response_model=AttributionCompareResponse
+)
 async def calculate_attribution(
     user_id: str,
     campaign_id: str,
@@ -157,7 +170,10 @@ async def calculate_attribution(
     """Calculate attribution models for the latest conversion of a user/campaign."""
     campaign_uuid = _as_uuid(campaign_id)
     if campaign_uuid is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid campaign_id")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid campaign_id",
+        )
 
     # Use the most recent conversion event for this user/campaign
     conversion_result = await db.execute(
@@ -221,6 +237,8 @@ async def get_model_comparison(
             {"channel": ch, "avg_credit": round(sum(values) / len(values), 4)}
             for ch, values in channel_values.items()
         ]
-        comparisons.append({"model_type": model_type, "channel_credits": channel_credits})
+        comparisons.append(
+            {"model_type": model_type, "channel_credits": channel_credits}
+        )
 
     return {"comparisons": comparisons}

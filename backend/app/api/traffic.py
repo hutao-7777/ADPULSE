@@ -5,11 +5,11 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import Depends, HTTPException, status
-from app.core.response import APIRouter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.response import APIRouter
 from app.models.models import FraudAlert, TrafficQualityScore
 from app.schemas.traffic import (
     FraudAlertResponse,
@@ -35,7 +35,11 @@ def _get_engine() -> TrafficQualityEngine:
     return _engine
 
 
-@router.post("/assess", response_model=TrafficQualityResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/assess",
+    response_model=TrafficQualityResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def assess_traffic(
     request: TrafficAssessRequest,
     db: AsyncSession = Depends(get_db),
@@ -43,7 +47,10 @@ async def assess_traffic(
     """Submit raw traffic metrics and receive a quality assessment."""
     campaign_uuid = _as_uuid(request.campaign_id)
     if campaign_uuid is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid campaign_id")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid campaign_id",
+        )
 
     date = request.date or datetime.utcnow()
     date = date.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -66,7 +73,10 @@ async def get_latest_quality(
     """Return the most recent quality score for a campaign."""
     campaign_uuid = _as_uuid(campaign_id)
     if campaign_uuid is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid campaign_id")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid campaign_id",
+        )
 
     result = await db.execute(
         select(TrafficQualityScore)
@@ -75,7 +85,9 @@ async def get_latest_quality(
     )
     score = result.scalar_one_or_none()
     if score is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No quality score found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No quality score found"
+        )
     return score
 
 
@@ -89,7 +101,10 @@ async def get_quality_trend(
     """Return daily traffic quality trend for a campaign."""
     campaign_uuid = _as_uuid(campaign_id)
     if campaign_uuid is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid campaign_id")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid campaign_id",
+        )
 
     trend = await engine.get_campaign_quality_trend(db, campaign_uuid, days)
     return {"trend": trend}
@@ -104,7 +119,10 @@ async def get_fraud_alerts(
     """List fraud alerts for a campaign, optionally filtered by status."""
     campaign_uuid = _as_uuid(campaign_id)
     if campaign_uuid is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid campaign_id")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid campaign_id",
+        )
 
     query = (
         select(FraudAlert)
@@ -126,11 +144,15 @@ async def resolve_fraud_alert(
     """Mark a fraud alert as resolved."""
     alert_uuid = _as_uuid(alert_id)
     if alert_uuid is None:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid alert_id")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid alert_id"
+        )
 
     alert = await db.get(FraudAlert, alert_uuid)
     if alert is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found"
+        )
 
     alert.status = "resolved"
     await db.commit()

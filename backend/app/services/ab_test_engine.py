@@ -5,8 +5,8 @@ import hashlib
 import math
 import uuid
 from collections import defaultdict
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple, cast
 
 import numpy as np
 from scipy import stats
@@ -24,10 +24,9 @@ class ABTestEngine:
     def __init__(self) -> None:
         # Per-test lock to serialize event recording
         self._locks: Dict[uuid.UUID, asyncio.Lock] = defaultdict(asyncio.Lock)
-        self._history: Dict[uuid.UUID, Dict[str, List[Tuple[datetime, float, float]]]] = defaultdict(
-            lambda: defaultdict(list)
-        )
-
+        self._history: Dict[
+            uuid.UUID, Dict[str, List[Tuple[datetime, float, float]]]
+        ] = defaultdict(lambda: defaultdict(list))
 
     def _user_bucket(self, test_id: uuid.UUID, user_id: str, salt: str = "") -> int:
         key = f"{str(test_id)}:{user_id}:{salt}".encode("utf-8")
@@ -116,7 +115,9 @@ class ABTestEngine:
         if not variants:
             return None
 
-        control_variant = next((v for v in variants if v.name.lower() == "control"), variants[0])
+        control_variant = next(
+            (v for v in variants if v.name.lower() == "control"), variants[0]
+        )
 
         bucket = self._user_bucket(test_id, user_id)
         experiment_threshold = int(test.traffic_split * self._BUCKET_SIZE)
@@ -188,11 +189,7 @@ class ABTestEngine:
     ) -> None:
         """Append current metric snapshot for anomaly detection."""
         ctr = variant.clicks / variant.impressions if variant.impressions > 0 else 0.0
-        cr = (
-            variant.conversions / variant.clicks
-            if variant.clicks > 0
-            else 0.0
-        )
+        cr = variant.conversions / variant.clicks if variant.clicks > 0 else 0.0
         self._history[test.id][variant.name].append((datetime.utcnow(), ctr, cr))
 
     def _build_samples(self, variant: ABTestVariant, metric: str) -> np.ndarray:
@@ -251,10 +248,10 @@ class ABTestEngine:
             raise ValueError("No control variant found")
 
         control_samples = self._build_samples(control, test.metric_target)
-        control_ctr = control.clicks / control.impressions if control.impressions > 0 else 0.0
-        control_cr = (
-            control.conversions / control.clicks if control.clicks > 0 else 0.0
+        control_ctr = (
+            control.clicks / control.impressions if control.impressions > 0 else 0.0
         )
+        control_cr = control.conversions / control.clicks if control.clicks > 0 else 0.0
 
         variant_stats = []
         best_variant: Optional[ABTestVariant] = None
@@ -266,26 +263,30 @@ class ABTestEngine:
             n = len(samples)
 
             if test.metric_target == "ctr":
-                metric_value = variant.clicks / variant.impressions if variant.impressions > 0 else 0.0
+                metric_value = (
+                    variant.clicks / variant.impressions
+                    if variant.impressions > 0
+                    else 0.0
+                )
                 baseline_value = control_ctr
-                successes = variant.clicks
-                baseline_successes = control.clicks
                 n_baseline = control.impressions
             elif test.metric_target == "conversion_rate":
                 metric_value = (
                     variant.conversions / variant.clicks if variant.clicks > 0 else 0.0
                 )
                 baseline_value = control_cr
-                successes = variant.conversions
-                baseline_successes = control.conversions
                 n_baseline = control.clicks
             else:  # roi
-                metric_value = variant.revenue / variant.impressions if variant.impressions > 0 else 0.0
-                baseline_value = (
-                    control.revenue / control.impressions if control.impressions > 0 else 0.0
+                metric_value = (
+                    variant.revenue / variant.impressions
+                    if variant.impressions > 0
+                    else 0.0
                 )
-                successes = variant.conversions
-                baseline_successes = control.conversions
+                baseline_value = (
+                    control.revenue / control.impressions
+                    if control.impressions > 0
+                    else 0.0
+                )
                 n_baseline = control.impressions
 
             # t-test on synthetic binary/revenue samples
@@ -335,11 +336,21 @@ class ABTestEngine:
                     "clicks": variant.clicks,
                     "conversions": variant.conversions,
                     "revenue": variant.revenue,
-                    "ctr": variant.clicks / variant.impressions if variant.impressions > 0 else 0.0,
-                    "conversion_rate": (
-                        variant.conversions / variant.clicks if variant.clicks > 0 else 0.0
+                    "ctr": (
+                        variant.clicks / variant.impressions
+                        if variant.impressions > 0
+                        else 0.0
                     ),
-                    "roi": variant.revenue / variant.impressions if variant.impressions > 0 else 0.0,
+                    "conversion_rate": (
+                        variant.conversions / variant.clicks
+                        if variant.clicks > 0
+                        else 0.0
+                    ),
+                    "roi": (
+                        variant.revenue / variant.impressions
+                        if variant.impressions > 0
+                        else 0.0
+                    ),
                     "lift_pct": lift_pct,
                     "p_value": p_value,
                     "is_significant": is_significant,
@@ -350,7 +361,9 @@ class ABTestEngine:
             )
 
         if best_variant and significant_lift:
-            recommendation = f"{best_variant.name} 显著优于 control (p={best_p_value:.4f})"
+            recommendation = (
+                f"{best_variant.name} 显著优于 control (p={best_p_value:.4f})"
+            )
         elif best_variant and not significant_lift:
             recommendation = "control 更优"
         else:
@@ -387,7 +400,7 @@ class ABTestEngine:
                 continue
 
             for metric_idx, metric_name in enumerate(["ctr", "conversion_rate"]):
-                values = [h[metric_idx + 1] for h in history]
+                values = cast(List[float], [h[metric_idx + 1] for h in history])
                 mean = float(np.mean(values[:-1]))
                 std = float(np.std(values[:-1]))
                 current = values[-1]
@@ -395,7 +408,9 @@ class ABTestEngine:
                 upper = mean + 3 * std
 
                 if current < lower or current > upper:
-                    severity = "critical" if abs(current - mean) > 5 * std else "warning"
+                    severity = (
+                        "critical" if abs(current - mean) > 5 * std else "warning"
+                    )
                     alerts.append(
                         {
                             "variant": variant.name,
@@ -407,5 +422,3 @@ class ABTestEngine:
                     )
 
         return alerts[0] if alerts else None
-
-

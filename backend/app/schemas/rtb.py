@@ -1,14 +1,14 @@
 """Pydantic schemas for RTB simulation."""
 
-from datetime import datetime
 from typing import List, Optional
-from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 
 class ImpressionSpec(BaseModel):
-    floor_price: float = Field(..., ge=0, description="Publisher floor price per impression")
+    floor_price: float = Field(
+        ..., ge=0, description="Publisher floor price per impression"
+    )
     user_segments: List[str] = Field(default_factory=list)
     device_type: str = Field(..., pattern="^(mobile|desktop|tablet)$")
     geo: str = Field(..., pattern="^(tier1|tier2|tier3)$")
@@ -22,7 +22,9 @@ class SingleAuctionRequest(ImpressionSpec):
 
 class BatchAuctionRequest(BaseModel):
     count: int = Field(..., ge=1, le=10000)
-    auction_type: str = Field(default="second_price", pattern="^(first_price|second_price)$")
+    auction_type: str = Field(
+        default="second_price", pattern="^(first_price|second_price)$"
+    )
     campaign_config: dict = Field(default_factory=dict)
 
 
@@ -66,7 +68,9 @@ class DSPStatus(BaseModel):
 
 
 class DSPConfigUpdate(BaseModel):
-    bidding_strategy: Optional[str] = Field(None, pattern="^(aggressive|balanced|conservative)$")
+    bidding_strategy: Optional[str] = Field(
+        None, pattern="^(aggressive|balanced|conservative)$"
+    )
     budget_remaining: Optional[float] = Field(None, ge=0)
     target_segments: Optional[List[str]] = None
     max_cpm: Optional[float] = Field(None, ge=0)

@@ -1,12 +1,11 @@
 """Agent API endpoints for the ReAct bidding agent."""
 
-from typing import Any, Dict, List
-
-from fastapi import HTTPException, status
-from app.core.response import APIRouter
+from typing import Any, Dict
 
 from app.agent.bidding_agent import BiddingAgent
+from app.core.response import APIRouter
 from app.schemas.agent import (
+    AgentMemoryEntry,
     AgentMemoryResponse,
     AgentRunRequest,
     AgentRunResponse,
@@ -60,14 +59,14 @@ async def get_agent_memory(campaign_id: str) -> AgentMemoryResponse:
     return AgentMemoryResponse(
         campaign_id=campaign_id,
         memory=[
-            {
-                "timestamp": m["timestamp"],
-                "action": m["action"],
-                "parameters": m["parameters"],
-                "result": m["result"],
-                "expected_vs_actual": m.get("expected_vs_actual", {}),
-                "learned": m["learned"],
-            }
+            AgentMemoryEntry(
+                timestamp=m["timestamp"],
+                action=m["action"],
+                parameters=m["parameters"],
+                result=m["result"],
+                expected_vs_actual=m.get("expected_vs_actual", {}),
+                learned=m["learned"],
+            )
             for m in memory
         ],
     )

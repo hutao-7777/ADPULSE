@@ -1,7 +1,8 @@
 """Pydantic schemas for dashboard resources."""
 
-from pydantic import BaseModel
 from typing import List
+
+from pydantic import BaseModel
 
 
 class RTBSummary(BaseModel):

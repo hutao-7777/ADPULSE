@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,7 +68,9 @@ class TrafficQualityEngine:
             sorted_ts = sorted(click_timestamps)
             for i in range(len(sorted_ts)):
                 window_end = sorted_ts[i]
-                count = sum(1 for ts in sorted_ts if window_end - 60 <= ts <= window_end)
+                count = sum(
+                    1 for ts in sorted_ts if window_end - 60 <= ts <= window_end
+                )
                 if count > 3:
                     flags.append("suspect_bot")
                     break
@@ -212,12 +214,17 @@ class TrafficQualityEngine:
 
         for score in scores:
             for flag in score.flags:
-                severity = "critical" if flag in {"bot_suspect", "ctr_anomaly"} else "warning"
+                severity = (
+                    "critical" if flag in {"bot_suspect", "ctr_anomaly"} else "warning"
+                )
                 alert = FraudAlert(
                     campaign_id=campaign_id,
                     alert_type=flag,
                     severity=severity,
-                    description=f"检测到流量异常标记: {flag}，质量分 {score.quality_score}，等级 {score.grade}。",
+                    description=(
+                        f"检测到流量异常标记: {flag}，"
+                        f"质量分 {score.quality_score}，等级 {score.grade}。"
+                    ),
                 )
                 db.add(alert)
                 alerts.append(

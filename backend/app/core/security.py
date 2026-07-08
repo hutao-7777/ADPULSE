@@ -48,7 +48,9 @@ def create_access_token(
     }
     if extra_claims:
         to_encode.update(extra_claims)
-    return cast(str, jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM))
+    return cast(
+        str, jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    )
 
 
 def create_refresh_token(
@@ -67,7 +69,9 @@ def create_refresh_token(
         "type": "refresh",
         "jti": token_id,
     }
-    token = cast(str, jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM))
+    token = cast(
+        str, jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    )
     token_hash = secrets.token_urlsafe(32)  # Store a hash in DB, not the raw token.
     return token, token_hash
 

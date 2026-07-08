@@ -1,16 +1,15 @@
 """RTB auction simulation API."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Dict, List
 
 from fastapi import Depends, HTTPException, status
-from app.core.response import APIRouter
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.models import Auction, BidRecord, Campaign
+from app.core.response import APIRouter
+from app.models.models import Auction, BidRecord
 from app.schemas.rtb import (
     AuctionResult,
     BatchAuctionRequest,
@@ -183,7 +182,9 @@ async def update_dsp_config(
     """Update configuration for a specific DSP."""
     dsp = engine.get_dsp(dsp_name)
     if dsp is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DSP not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="DSP not found"
+        )
 
     if update.bidding_strategy is not None:
         dsp.bidding_strategy = update.bidding_strategy

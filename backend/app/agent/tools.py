@@ -3,7 +3,7 @@
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +12,7 @@ from app.core.database import AsyncSessionLocal
 from app.models.models import Auction, BidRecord, Campaign, Creative, DailyMetric
 
 
-async def _get_db() -> AsyncSession:
+async def _get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         yield session
 
@@ -35,7 +35,9 @@ async def get_campaign_performance(campaign_id: str) -> Dict[str, Any]:
         since = datetime.now(timezone.utc) - timedelta(days=7)
         result = await session.execute(
             select(
-                func.coalesce(func.sum(DailyMetric.impressions), 0).label("impressions"),
+                func.coalesce(func.sum(DailyMetric.impressions), 0).label(
+                    "impressions"
+                ),
                 func.coalesce(func.sum(DailyMetric.clicks), 0).label("clicks"),
                 func.coalesce(func.sum(DailyMetric.spend), 0.0).label("spend"),
                 func.coalesce(func.sum(DailyMetric.revenue), 0.0).label("revenue"),
@@ -72,7 +74,9 @@ async def get_campaign_performance(campaign_id: str) -> Dict[str, Any]:
         }
 
 
-async def get_auction_history(campaign_id: str, hours: int = 24) -> List[Dict[str, Any]]:
+async def get_auction_history(
+    campaign_id: str, hours: int = 24
+) -> List[Dict[str, Any]]:
     """Return recent auction records for a campaign."""
     async with AsyncSessionLocal() as session:
         campaign_uuid = _as_uuid(campaign_id)
@@ -103,20 +107,30 @@ async def get_auction_history(campaign_id: str, hours: int = 24) -> List[Dict[st
                     "auction_id": auction.impression_id,
                     "auction_type": auction.auction_type,
                     "floor_price_cpm": round(auction.floor_price * 1000.0, 4),
-                    "winning_bid_cpm": round(auction.winning_bid * 1000.0, 4) if auction.winning_bid else None,
+                    "winning_bid_cpm": (
+                        round(auction.winning_bid * 1000.0, 4)
+                        if auction.winning_bid
+                        else None
+                    ),
                     "winning_dsp": auction.winning_dsp,
                     "total_bids": len(bids),
-                    "avg_competitor_bid_cpm": round(sum(competitor_bids) / len(competitor_bids), 4)
-                    if competitor_bids
-                    else None,
+                    "avg_competitor_bid_cpm": (
+                        round(sum(competitor_bids) / len(competitor_bids), 4)
+                        if competitor_bids
+                        else None
+                    ),
                     "latency_ms": auction.latency_ms,
-                    "created_at": auction.created_at.isoformat() if auction.created_at else None,
+                    "created_at": (
+                        auction.created_at.isoformat() if auction.created_at else None
+                    ),
                 }
             )
         return records
 
 
-async def get_market_benchmark(geo: str, ad_format: str, category: str) -> Dict[str, Any]:
+async def get_market_benchmark(
+    geo: str, ad_format: str, category: str
+) -> Dict[str, Any]:
     """Return mock market benchmark data for a segment."""
     # Deterministic pseudo-random based on input so the same segment is stable
     seed = hash((geo.lower(), ad_format.lower(), category.lower())) % 10000
@@ -131,7 +145,9 @@ async def get_market_benchmark(geo: str, ad_format: str, category: str) -> Dict[
     avg_ctr = round(base_ctr * (0.9 + rng.random() * 0.2), 6)
     competition_score = rng.random()
     competition_level = (
-        "high" if competition_score > 0.66 else "medium" if competition_score > 0.33 else "low"
+        "high"
+        if competition_score > 0.66
+        else "medium" if competition_score > 0.33 else "low"
     )
 
     return {

@@ -42,7 +42,7 @@ class BiddingAgent:
         """Placeholder: in a full schema creatives would be linked to campaigns."""
         # Derive a stable fake creative id from campaign id for deterministic demos.
         try:
-            base = uuid.UUID(self.campaign_id)
+            uuid.UUID(self.campaign_id)
         except ValueError:
             return None
         # Deterministic UUIDv5-ish derivation using namespace + campaign id
@@ -61,9 +61,7 @@ class BiddingAgent:
         )
 
         creative_id = self._creative_id_for_campaign()
-        creative = (
-            await get_creative_performance(creative_id) if creative_id else {}
-        )
+        creative = await get_creative_performance(creative_id) if creative_id else {}
 
         # Compute derived auction metrics
         total_auctions = len(auctions)
@@ -78,8 +76,8 @@ class BiddingAgent:
         analysis_parts = [
             f"Campaign {self.campaign_id} 过去7天获得 {performance['impressions']} 次展示, "
             f"{performance['clicks']} 次点击, CTR {performance['ctr']:.4f}.",
-            f"总花费 ${performance['spend']:.2f}, 收入 ${performance['revenue']:.2f}, ROI {performance['roi']:.2f}, "
-            f"预算消耗率 {performance['spend_ratio']:.1%}.",
+            f"总花费 ${performance['spend']:.2f}, 收入 ${performance['revenue']:.2f}, "
+            f"ROI {performance['roi']:.2f}, 预算消耗率 {performance['spend_ratio']:.1%}.",
             f"近24小时拍卖 {total_auctions} 次, 胜出 {len(wins)} 次, 胜率 {win_rate:.1%}, "
             f"平均获胜CPM ${avg_winning_cpm:.2f}.",
             f"市场基准 CTR {benchmark['avg_ctr']:.4f}, 平均CPM ${benchmark['avg_cpm']:.2f}, "
@@ -137,9 +135,7 @@ class BiddingAgent:
             geo="tier1", ad_format="banner_300x250", category="ecommerce"
         )
         creative_id = self._creative_id_for_campaign()
-        creative = (
-            await get_creative_performance(creative_id) if creative_id else {}
-        )
+        creative = await get_creative_performance(creative_id) if creative_id else {}
 
         total_auctions = len(auctions)
         wins = [a for a in auctions if a["winning_dsp"]]
@@ -169,9 +165,7 @@ class BiddingAgent:
         elif performance["roi"] > 2.0:
             action = "increase_bid"
             params = {"bid_adjustment_pct": 0.1}
-            reasoning = (
-                f"ROI {performance['roi']:.2f} 大于2.0, 广告效益良好, 建议适度加大投入。"
-            )
+            reasoning = f"ROI {performance['roi']:.2f} 大于2.0, 广告效益良好, 建议适度加大投入。"
         elif performance["ctr"] < benchmark["avg_ctr"] * 0.8 and fatigue < 0.5:
             action = "optimize_creative"
             params = {"bid_adjustment_pct": -0.1}
@@ -196,9 +190,9 @@ class BiddingAgent:
         result = action_result.get("result", {})
 
         expected_ctr_change = result.get("expected_ctr_change_pct", 0.0) / 100.0
-        expected_impressions_change = result.get(
-            "expected_impressions_change_pct", 0.0
-        ) / 100.0
+        expected_impressions_change = (
+            result.get("expected_impressions_change_pct", 0.0) / 100.0
+        )
 
         # Simulate "actual" outcome based on expected with small noise
         import random
@@ -214,7 +208,9 @@ class BiddingAgent:
             "expected_impressions_change_pct": round(
                 expected_impressions_change * 100.0, 2
             ),
-            "actual_impressions_change_pct": round(actual_impressions_change * 100.0, 2),
+            "actual_impressions_change_pct": round(
+                actual_impressions_change * 100.0, 2
+            ),
         }
 
         if action == "switch_creative":
@@ -225,7 +221,8 @@ class BiddingAgent:
             learned = "指标健康时避免频繁调整, 让模型/数据稳定积累。"
         else:
             observation = (
-                f"执行 {action} 后, 预估 impressions 变化 {expected_vs_actual['expected_impressions_change_pct']}%, "
+                f"执行 {action} 后, 预估 impressions 变化 "
+                f"{expected_vs_actual['expected_impressions_change_pct']}%, "
                 f"实际预估反馈 {expected_vs_actual['actual_impressions_change_pct']}%; "
                 f"CTR 预估变化 {expected_vs_actual['expected_ctr_change_pct']}%。"
             )
@@ -260,7 +257,11 @@ class BiddingAgent:
 
             if action["action"] == "maintain_strategy":
                 observation = await self.observe(
-                    {"action": action["action"], "parameters": action["parameters"], "result": {}}
+                    {
+                        "action": action["action"],
+                        "parameters": action["parameters"],
+                        "result": {},
+                    }
                 )
                 iterations.append(
                     {
@@ -273,9 +274,14 @@ class BiddingAgent:
                 break
 
             # Simulate tool execution
-            if action["action"] in {"increase_bid", "decrease_bid", "optimize_creative"}:
+            if action["action"] in {
+                "increase_bid",
+                "decrease_bid",
+                "optimize_creative",
+            }:
                 result = await adjust_bid(
-                    self.campaign_id, action["parameters"].get("bid_adjustment_pct", 0.0)
+                    self.campaign_id,
+                    action["parameters"].get("bid_adjustment_pct", 0.0),
                 )
             elif action["action"] == "switch_creative":
                 result = {"creative_switch_recommended": True, "simulated": True}
@@ -283,7 +289,11 @@ class BiddingAgent:
                 result = {}
 
             observation = await self.observe(
-                {"action": action["action"], "parameters": action["parameters"], "result": result}
+                {
+                    "action": action["action"],
+                    "parameters": action["parameters"],
+                    "result": result,
+                }
             )
 
             iterations.append(

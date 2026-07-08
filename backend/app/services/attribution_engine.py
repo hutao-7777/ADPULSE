@@ -1,6 +1,8 @@
-"""Multi-touch attribution engine supporting first/last/linear/time-decay/U-shaped/Shapley models."""
+"""Multi-touch attribution engine.
 
-import math
+Supports first/last/linear/time-decay/U-shaped/Shapley models.
+"""
+
 import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -48,7 +50,9 @@ class AttributionEngine:
             "channel": tp.channel,
             "event_type": tp.event_type,
             "event_time": tp.event_time.isoformat() if tp.event_time else None,
-            "conversion_event_id": str(tp.conversion_event_id) if tp.conversion_event_id else None,
+            "conversion_event_id": (
+                str(tp.conversion_event_id) if tp.conversion_event_id else None
+            ),
         }
 
     def _channels(self, journey: List[Dict]) -> List[str]:
@@ -136,7 +140,9 @@ class AttributionEngine:
         return credit
 
     def calculate_shapley_approx(self, journey: List[Dict]) -> Dict[str, float]:
-        """Simplified Shapley-style approximation using weighted positional frequency."""
+        """Simplified Shapley-style approximation using weighted positional
+        frequency.
+        """
         if not journey:
             return {}
         channels = self._channels(journey)
@@ -187,7 +193,9 @@ class AttributionEngine:
             "summary": summary,
         }
 
-    def _build_summary(self, journey: List[Dict], model_values: Dict[str, Dict[str, float]]) -> str:
+    def _build_summary(
+        self, journey: List[Dict], model_values: Dict[str, Dict[str, float]]
+    ) -> str:
         if not journey:
             return "无可用触点路径。"
         first = journey[0]["channel"]
@@ -200,7 +208,7 @@ class AttributionEngine:
         ]
 
         for model, values in model_values.items():
-            top_channel = max(values, key=values.get) if values else "无"
+            top_channel = max(values, key=lambda k: values[k]) if values else "无"
             top_value = values.get(top_channel, 0.0)
             lines.append(
                 f"{self._model_label(model)} 下，{top_channel} 贡献最高 (¥{top_value:.2f})。"

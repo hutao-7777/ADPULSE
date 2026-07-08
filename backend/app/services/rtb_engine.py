@@ -47,7 +47,9 @@ class DSPBidder:
     def _relevance_score(self, impression: Impression) -> float:
         if not self.target_segments:
             return 0.5
-        matches = [seg for seg in impression.user_segments if seg in self.target_segments]
+        matches = [
+            seg for seg in impression.user_segments if seg in self.target_segments
+        ]
         if not matches:
             return 0.1
         return max(0.1, min(1.0, len(matches) / max(len(self.target_segments), 1)))
@@ -102,7 +104,11 @@ class DSPBidder:
 class AuctionEngine:
     """Runs first-price or second-price auctions across registered DSPs."""
 
-    def __init__(self, auction_type: str = "second_price", registered_dsps: Optional[List[DSPBidder]] = None) -> None:
+    def __init__(
+        self,
+        auction_type: str = "second_price",
+        registered_dsps: Optional[List[DSPBidder]] = None,
+    ) -> None:
         if auction_type not in {"first_price", "second_price"}:
             raise ValueError("auction_type must be 'first_price' or 'second_price'")
         self.auction_type: str = auction_type
@@ -155,7 +161,9 @@ class AuctionEngine:
         if self.auction_type == "first_price":
             settlement_price = winner_bid["bid"]
         else:  # second_price
-            settlement_price = sorted_bids[1]["bid"] if len(sorted_bids) > 1 else winner_bid["bid"]
+            settlement_price = (
+                sorted_bids[1]["bid"] if len(sorted_bids) > 1 else winner_bid["bid"]
+            )
 
         settlement_price = max(settlement_price, impression.floor_price)
 

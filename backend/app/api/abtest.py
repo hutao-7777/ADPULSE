@@ -4,11 +4,11 @@ import uuid
 from typing import List, Optional
 
 from fastapi import Depends, HTTPException, Query, status
-from app.core.response import APIRouter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.response import APIRouter
 from app.models.models import ABTest, ABTestVariant
 from app.schemas.abtest import (
     ABTestCreate,
@@ -32,7 +32,9 @@ def get_engine() -> ABTestEngine:
     return _engine
 
 
-@router.post("", response_model=ABTestDetailResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=ABTestDetailResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_ab_test(
     request: ABTestCreate,
     db: AsyncSession = Depends(get_db),
@@ -48,23 +50,22 @@ async def create_ab_test(
         variants_config=[v.model_dump() for v in request.variants_config],
     )
 
-    test = await db.get(ABTest, result["id"])
+    test_id = result["id"]
+    test = await db.get(ABTest, test_id)
+    if test is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="A/B test not found",
+        )
+
     variants_result = await db.execute(
-        select(ABTestVariant).where(ABTestVariant.ab_test_id == test.id)
+        select(ABTestVariant).where(ABTestVariant.ab_test_id == test_id)
     )
     variants = variants_result.scalars().all()
 
+    base = ABTestResponse.model_validate(test)
     return ABTestDetailResponse(
-        id=test.id,
-        name=test.name,
-        campaign_id=test.campaign_id,
-        status=test.status,
-        traffic_split=test.traffic_split,
-        metric_target=test.metric_target,
-        start_date=test.start_date,
-        end_date=test.end_date,
-        winner=test.winner,
-        created_at=test.created_at,
+        **base.model_dump(),
         variants=[ABTestVariantResponse.model_validate(v) for v in variants],
     )
 
@@ -91,7 +92,9 @@ async def get_ab_test(
     """Get A/B test details including variants."""
     test = await db.get(ABTest, test_id)
     if test is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Test not found"
+        )
 
     variants_result = await db.execute(
         select(ABTestVariant).where(ABTestVariant.ab_test_id == test.id)
@@ -121,9 +124,13 @@ async def start_ab_test(
     """Start an A/B test."""
     test = await db.get(ABTest, test_id)
     if test is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Test not found"
+        )
     if test.status == "running":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Test already running")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Test already running"
+        )
 
     from datetime import datetime
 
@@ -142,9 +149,13 @@ async def stop_ab_test(
     """Stop an A/B test."""
     test = await db.get(ABTest, test_id)
     if test is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Test not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Test not found"
+        )
     if test.status != "running":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Test is not running")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Test is not running"
+        )
 
     from datetime import datetime
 
@@ -165,7 +176,9 @@ async def get_ab_test_results(
     try:
         results = await engine.get_results(db, test_id)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     return ABTestResults(**results)
 
 
@@ -213,7 +226,9 @@ async def check_ab_test_anomaly(
     try:
         alert = await engine.check_anomaly(db, test_id)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     if alert is None:
         return None
     return AnomalyAlert(**alert)
