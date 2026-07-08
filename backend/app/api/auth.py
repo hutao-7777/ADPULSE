@@ -1,17 +1,15 @@
 """Authentication API endpoints."""
 
-from fastapi import Depends, status
+import uuid
+
+from fastapi import Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import APIRouter
-from app.core.security import (
-    get_current_active_user,
-    require_permission,
-    validate_api_key,
-)
+from app.core.security import get_current_active_user, validate_api_key
 from app.models.models import ApiKey, User
 from app.services.auth_service import AuthService
 
@@ -143,15 +141,28 @@ async def list_api_keys(
 async def register(
     request: LoginRequest,
     db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_permission("user:write")),
 ) -> dict:
-    """Register a new user (admin-only in this demo)."""
+    """Register a new user."""
     user = await auth_service.create_user(
         db,
         email=request.email,
         password=request.password,
     )
     return {"id": str(user.id), "email": user.email}
+
+
+@router.delete("/api-keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_api_key(
+    key_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> None:
+    """Revoke an API key owned by the current user."""
+    revoked = await auth_service.revoke_api_key(db, current_user.id, key_id)
+    if not revoked:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="API key not found"
+        )
 
 
 @router.get("/api-key-check")

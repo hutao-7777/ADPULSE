@@ -158,6 +158,17 @@ class AuthService:
         await db.refresh(api_key)
         return api_key, raw_key
 
+    async def revoke_api_key(
+        self, db: AsyncSession, user_id: uuid.UUID, key_id: uuid.UUID
+    ) -> bool:
+        """Revoke an API key by id. Returns True if the key existed and was revoked."""
+        key = await db.get(ApiKey, key_id)
+        if key is None or key.user_id != user_id:
+            return False
+        key.is_active = False
+        await db.commit()
+        return True
+
     async def create_user(
         self,
         db: AsyncSession,
