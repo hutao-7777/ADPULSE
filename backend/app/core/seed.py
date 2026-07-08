@@ -8,15 +8,21 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
+from app.core.security import get_password_hash
 from app.models.models import (
+    ABTest,
+    ABTestVariant,
+    ApiKey,
+    Auction,
     Campaign,
     Creative,
     DailyMetric,
-    ABTest,
-    ABTestVariant,
-    Auction,
+    Permission,
+    Role,
+    User,
+    role_permissions,
+    user_roles,
 )
-
 
 NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
@@ -39,11 +45,102 @@ async def seed_data(session: AsyncSession | None = None) -> None:
 
 
 async def _seed_all(session: AsyncSession) -> None:
+    await _seed_auth(session)
     await _seed_campaigns(session)
     await _seed_daily_metrics(session)
     await _seed_creatives(session)
     await _seed_ab_tests(session)
     await _seed_auctions(session)
+
+
+async def _seed_auth(session: AsyncSession) -> None:
+    """Seed default roles, permissions and a demo admin user."""
+    # Permissions
+    permission_codes = [
+        "user:write",
+        "campaign:read",
+        "campaign:write",
+        "apikey:write",
+        "rtb:write",
+    ]
+    permissions = [
+        {"id": _uuid(f"permission-{code}"), "code": code} for code in permission_codes
+    ]
+    await session.execute(
+        sqlite_insert(Permission)
+        .values(permissions)
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+
+    # Roles
+    role_defs = {
+        "admin": permission_codes,
+        "advertiser": ["campaign:read", "campaign:write", "apikey:write"],
+        "viewer": ["campaign:read"],
+    }
+    role_records = {}
+    for role_name, perms in role_defs.items():
+        role_id = _uuid(f"role-{role_name}")
+        role_records[role_name] = role_id
+        await session.execute(
+            sqlite_insert(Role)
+            .values({"id": role_id, "name": role_name})
+            .on_conflict_do_nothing(index_elements=["id"])
+        )
+        # Link permissions
+        role_perms = []
+        for code in perms:
+            perm_id = _uuid(f"permission-{code}")
+            role_perms.append({"role_id": role_id, "permission_id": perm_id})
+        if role_perms:
+            await session.execute(
+                sqlite_insert(role_permissions)
+                .values(role_perms)
+                .on_conflict_do_nothing(index_elements=["role_id", "permission_id"])
+            )
+
+    # Demo admin user
+    admin_id = _uuid("user-admin")
+    await session.execute(
+        sqlite_insert(User)
+        .values(
+            {
+                "id": admin_id,
+                "email": "admin@adpulse.local",
+                "hashed_password": get_password_hash("admin123"),
+                "full_name": "Demo Admin",
+                "is_active": True,
+                "is_superuser": True,
+            }
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+    await session.execute(
+        sqlite_insert(user_roles)
+        .values({"user_id": admin_id, "role_id": role_records["admin"]})
+        .on_conflict_do_nothing(index_elements=["user_id", "role_id"])
+    )
+
+    # Demo DSP API key (raw key: adpulse_demo_dsp_key)
+    api_key_id = _uuid("apikey-demo-dsp")
+    await session.execute(
+        sqlite_insert(ApiKey)
+        .values(
+            {
+                "id": api_key_id,
+                "user_id": admin_id,
+                "name": "Demo DSP Key",
+                "key_prefix": "adpulse_",
+                "key_hash": get_password_hash("adpulse_demo_dsp_key"),
+                "scopes": ["rtb:write"],
+                "rate_limit_rps": 1000,
+                "is_active": True,
+            }
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+    )
+
+    await session.commit()
 
 
 SEED_CAMPAIGNS = {
@@ -87,7 +184,9 @@ async def _seed_campaigns(session: AsyncSession) -> None:
         },
     ]
     await session.execute(
-        sqlite_insert(Campaign).values(campaigns).on_conflict_do_nothing(index_elements=["id"])
+        sqlite_insert(Campaign)
+        .values(campaigns)
+        .on_conflict_do_nothing(index_elements=["id"])
     )
     await session.commit()
 
@@ -135,7 +234,9 @@ async def _seed_daily_metrics(session: AsyncSession) -> None:
             )
 
     await session.execute(
-        sqlite_insert(DailyMetric).values(metrics).on_conflict_do_nothing(index_elements=["id"])
+        sqlite_insert(DailyMetric)
+        .values(metrics)
+        .on_conflict_do_nothing(index_elements=["id"])
     )
     await session.commit()
 
@@ -171,7 +272,9 @@ async def _seed_creatives(session: AsyncSession) -> None:
         },
     ]
     await session.execute(
-        sqlite_insert(Creative).values(creatives).on_conflict_do_nothing(index_elements=["id"])
+        sqlite_insert(Creative)
+        .values(creatives)
+        .on_conflict_do_nothing(index_elements=["id"])
     )
     await session.commit()
 
@@ -204,7 +307,9 @@ async def _seed_ab_tests(session: AsyncSession) -> None:
         },
     ]
     await session.execute(
-        sqlite_insert(ABTest).values(ab_tests).on_conflict_do_nothing(index_elements=["id"])
+        sqlite_insert(ABTest)
+        .values(ab_tests)
+        .on_conflict_do_nothing(index_elements=["id"])
     )
     await session.commit()
 
@@ -253,7 +358,9 @@ async def _seed_ab_tests(session: AsyncSession) -> None:
         },
     ]
     await session.execute(
-        sqlite_insert(ABTestVariant).values(variants).on_conflict_do_nothing(index_elements=["id"])
+        sqlite_insert(ABTestVariant)
+        .values(variants)
+        .on_conflict_do_nothing(index_elements=["id"])
     )
     await session.commit()
 
@@ -288,6 +395,8 @@ async def _seed_auctions(session: AsyncSession) -> None:
         )
 
     await session.execute(
-        sqlite_insert(Auction).values(auctions).on_conflict_do_nothing(index_elements=["id"])
+        sqlite_insert(Auction)
+        .values(auctions)
+        .on_conflict_do_nothing(index_elements=["id"])
     )
     await session.commit()
