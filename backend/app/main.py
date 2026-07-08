@@ -5,7 +5,19 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import abtest, agent, attribution, auth, dashboard, rtb, traffic
+from app.api import (
+    abtest,
+    abtest_v2,
+    agent,
+    agent_v2,
+    attribution,
+    attribution_v2,
+    auth,
+    dashboard,
+    rtb,
+    rtb_v2,
+    traffic,
+)
 from app.core.config import settings
 from app.core.database import Base, engine
 from app.core.redis import close_redis
@@ -43,11 +55,15 @@ register_exception_handlers(app)
 
 app.include_router(auth.router)
 app.include_router(attribution.router)
+app.include_router(attribution_v2.router)
 app.include_router(traffic.router)
 app.include_router(rtb.router)
+app.include_router(rtb_v2.router)
 app.include_router(abtest.router)
+app.include_router(abtest_v2.router)
 app.include_router(dashboard.router)
 app.include_router(agent.router)
+app.include_router(agent_v2.router)
 
 
 @app.get("/health")
