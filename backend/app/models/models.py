@@ -1,243 +1,801 @@
+"""SQLAlchemy 2.0 domain models for AdPulse.
+
+All primary keys use UUID. PostgreSQL + pgvector is the target database.
+Migrations are managed by Alembic; auto-create-all is forbidden in production.
+"""
+
 import uuid
 from datetime import datetime
-from typing import Optional, List
+from typing import List, Optional
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
-    String,
-    Float,
+    JSON,
+    Boolean,
+    Column,
     DateTime,
-    Integer,
+    Float,
     ForeignKey,
     Index,
-    JSON,
+    Integer,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+    Uuid,
 )
-from sqlalchemy import Uuid as SQLiteUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
+# ---------------------------------------------------------------------------
+# Association tables
+# ---------------------------------------------------------------------------
 
-class Creative(Base):
-    __tablename__ = "creatives"
+user_roles = Table(
+    "user_roles",
+    Base.metadata,
+    Column(
+        "user_id",
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "role_id",
+        Uuid(as_uuid=True),
+        ForeignKey("roles.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
+role_permissions = Table(
+    "role_permissions",
+    Base.metadata,
+    Column(
+        "role_id",
+        Uuid(as_uuid=True),
+        ForeignKey("roles.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "permission_id",
+        Uuid(as_uuid=True),
+        ForeignKey("permissions.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
+campaign_audience_segments = Table(
+    "campaign_audience_segments",
+    Base.metadata,
+    Column(
+        "campaign_id",
+        Uuid(as_uuid=True),
+        ForeignKey("campaigns.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "audience_segment_id",
+        Uuid(as_uuid=True),
+        ForeignKey("audience_segments.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Auth & RBAC
+# ---------------------------------------------------------------------------
+
+
+class User(Base):
+    __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        SQLiteUUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    image_path: Mapped[str] = mapped_column(String(512), nullable=False)
-    file_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    upload_time: Mapped[datetime] = mapped_column(
+    email: Mapped[str] = mapped_column(
+        String(255), unique=True, nullable=False, index=True
+    )
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False), default=datetime.utcnow, nullable=False
     )
-    ai_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    predicted_ctr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    fatigue_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-
-    __table_args__ = (
-        Index("ix_creative_upload_time", "upload_time"),
-        Index("ix_creative_name", "name"),
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False),
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
     )
 
-    def __repr__(self) -> str:
-        return f"<Creative(id={self.id}, name={self.name!r})>"
+    roles: Mapped[List["Role"]] = relationship(
+        "Role", secondary=user_roles, back_populates="users", lazy="selectin"
+    )
+    permissions: Mapped[List["Permission"]] = relationship(
+        "Permission",
+        secondary="user_permissions",
+        back_populates="users",
+        lazy="selectin",
+    )
+    api_keys: Mapped[List["ApiKey"]] = relationship("ApiKey", back_populates="user")
+    refresh_tokens: Mapped[List["RefreshToken"]] = relationship(
+        "RefreshToken", back_populates="user"
+    )
+    advertisers: Mapped[List["Advertiser"]] = relationship(
+        "Advertiser", back_populates="owner"
+    )
+    agent_configs: Mapped[List["AgentConfig"]] = relationship(
+        "AgentConfig", back_populates="user"
+    )
+    agent_runs: Mapped[List["AgentRun"]] = relationship(
+        "AgentRun", back_populates="user"
+    )
+
+    __table_args__ = (Index("ix_users_email_active", "email", "is_active"),)
+
+
+class Role(Base):
+    __tablename__ = "roles"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(
+        String(50), unique=True, nullable=False, index=True
+    )
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    users: Mapped[List["User"]] = relationship(
+        "User", secondary=user_roles, back_populates="roles"
+    )
+    permissions: Mapped[List["Permission"]] = relationship(
+        "Permission", secondary=role_permissions, back_populates="roles"
+    )
+
+
+class Permission(Base):
+    __tablename__ = "permissions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    code: Mapped[str] = mapped_column(
+        String(100), unique=True, nullable=False, index=True
+    )
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    roles: Mapped[List["Role"]] = relationship(
+        "Role", secondary=role_permissions, back_populates="permissions"
+    )
+    users: Mapped[List["User"]] = relationship(
+        "User", secondary="user_permissions", back_populates="permissions"
+    )
+
+
+class UserPermission(Base):
+    __tablename__ = "user_permissions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    permission_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("permissions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    granted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "permission_id", name="uq_user_permission"),
+    )
+
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    token_hash: Mapped[str] = mapped_column(
+        String(255), unique=True, nullable=False, index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="refresh_tokens")
+
+    __table_args__ = (Index("ix_refresh_tokens_user_created", "user_id", "created_at"),)
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    key_prefix: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    key_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    scopes: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
+    rate_limit_rps: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="api_keys")
+
+    __table_args__ = (Index("ix_api_keys_prefix_active", "key_prefix", "is_active"),)
+
+
+# ---------------------------------------------------------------------------
+# Advertiser & Campaign domain
+# ---------------------------------------------------------------------------
+
+
+class Advertiser(Base):
+    __tablename__ = "advertisers"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    industry: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    website: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    billing_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False),
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    owner: Mapped["User"] = relationship("User", back_populates="advertisers")
+    campaigns: Mapped[List["Campaign"]] = relationship(
+        "Campaign", back_populates="advertiser"
+    )
+
+
+class AudienceSegment(Base):
+    __tablename__ = "audience_segments"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rules: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    estimated_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    campaigns: Mapped[List["Campaign"]] = relationship(
+        "Campaign",
+        secondary=campaign_audience_segments,
+        back_populates="audience_segments",
+    )
+
+
+class BiddingStrategy(Base):
+    __tablename__ = "bidding_strategies"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    strategy_type: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # e.g. "manual_cpc", "target_cpa", "roi"
+    config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    campaigns: Mapped[List["Campaign"]] = relationship(
+        "Campaign", back_populates="bidding_strategy"
+    )
 
 
 class Campaign(Base):
     __tablename__ = "campaigns"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        SQLiteUUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    advertiser_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("advertisers.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    bidding_strategy_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("bidding_strategies.id", ondelete="SET NULL"),
+        nullable=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), default="paused", nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(50), default="draft", nullable=False, index=True
+    )  # draft, active, paused, archived
     budget: Mapped[float] = mapped_column(Float, nullable=False)
+    daily_budget: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     spent: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    start_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False), nullable=True)
-    end_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False), nullable=True)
+    start_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    end_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
     target_cpa: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    target_roas: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    frequency_cap: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False), default=datetime.utcnow, nullable=False
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False),
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
 
-    auctions: Mapped[List["Auction"]] = relationship("Auction", back_populates="campaign")
-    ab_tests: Mapped[List["ABTest"]] = relationship("ABTest", back_populates="campaign")
+    advertiser: Mapped["Advertiser"] = relationship(
+        "Advertiser", back_populates="campaigns"
+    )
+    bidding_strategy: Mapped[Optional["BiddingStrategy"]] = relationship(
+        "BiddingStrategy", back_populates="campaigns"
+    )
+    audience_segments: Mapped[List["AudienceSegment"]] = relationship(
+        "AudienceSegment",
+        secondary=campaign_audience_segments,
+        back_populates="campaigns",
+    )
+    creatives: Mapped[List["Creative"]] = relationship(
+        "Creative", back_populates="campaign"
+    )
+    experiments: Mapped[List["Experiment"]] = relationship(
+        "Experiment", back_populates="campaign"
+    )
     daily_metrics: Mapped[List["DailyMetric"]] = relationship(
         "DailyMetric", back_populates="campaign"
     )
     touchpoints: Mapped[List["Touchpoint"]] = relationship(
         "Touchpoint", back_populates="campaign"
     )
+    auction_requests: Mapped[List["AuctionRequest"]] = relationship(
+        "AuctionRequest", back_populates="campaign"
+    )
 
     __table_args__ = (
-        Index("ix_campaign_status", "status"),
-        Index("ix_campaign_created_at", "created_at"),
+        Index("ix_campaigns_status_dates", "status", "start_date", "end_date"),
+        Index("ix_campaigns_advertiser_status", "advertiser_id", "status"),
     )
 
-    def __repr__(self) -> str:
-        return f"<Campaign(id={self.id}, name={self.name!r}, status={self.status!r})>"
 
-
-class Auction(Base):
-    __tablename__ = "auctions"
+class Creative(Base):
+    __tablename__ = "creatives"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        SQLiteUUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    campaign_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        ForeignKey("campaigns.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    impression_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    floor_price: Mapped[float] = mapped_column(Float, nullable=False)
-    winning_bid: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    winning_dsp: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    auction_type: Mapped[str] = mapped_column(
-        String(50), default="first_price", nullable=False
-    )
-    latency_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=False), default=datetime.utcnow, nullable=False
-    )
-
-    campaign: Mapped[Optional["Campaign"]] = relationship("Campaign", back_populates="auctions")
-    bids: Mapped[List["BidRecord"]] = relationship("BidRecord", back_populates="auction")
-
-    __table_args__ = (
-        Index("ix_auction_campaign_id", "campaign_id"),
-        Index("ix_auction_created_at", "created_at"),
-    )
-
-    def __repr__(self) -> str:
-        return f"<Auction(id={self.id}, campaign_id={self.campaign_id}, impression_id={self.impression_id!r})>"
-
-
-class BidRecord(Base):
-    __tablename__ = "bid_records"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        SQLiteUUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-    auction_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("auctions.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    dsp_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    bid_amount: Mapped[float] = mapped_column(Float, nullable=False)
-    ctr_estimate: Mapped[float] = mapped_column(Float, nullable=False)
-    was_winner: Mapped[bool] = mapped_column(default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=False), default=datetime.utcnow, nullable=False
-    )
-
-    auction: Mapped["Auction"] = relationship("Auction", back_populates="bids")
-
-    __table_args__ = (
-        Index("ix_bid_record_auction_id", "auction_id"),
-        Index("ix_bid_record_dsp_name", "dsp_name"),
-    )
-
-    def __repr__(self) -> str:
-        return f"<BidRecord(id={self.id}, auction_id={self.auction_id}, dsp_name={self.dsp_name!r})>"
-
-
-class ABTest(Base):
-    __tablename__ = "ab_tests"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        SQLiteUUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-    )
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
     campaign_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
         ForeignKey("campaigns.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
-    status: Mapped[str] = mapped_column(String(50), default="draft", nullable=False)
-    traffic_split: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
-    metric_target: Mapped[str] = mapped_column(String(100), nullable=False)
-    start_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False), nullable=True)
-    end_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=False), nullable=True)
-    winner: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    asset_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    file_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    size: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    call_to_action: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    ai_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    predicted_ctr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    fatigue_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False), default=datetime.utcnow, nullable=False
     )
 
-    campaign: Mapped[Optional["Campaign"]] = relationship("Campaign", back_populates="ab_tests")
-    variants: Mapped[List["ABTestVariant"]] = relationship(
-        "ABTestVariant", back_populates="ab_test"
+    campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="creatives")
+    bids: Mapped[List["AuctionBid"]] = relationship(
+        "AuctionBid", back_populates="creative"
     )
 
     __table_args__ = (
-        Index("ix_ab_test_campaign_id", "campaign_id"),
-        Index("ix_ab_test_status", "status"),
+        Index("ix_creatives_campaign_active", "campaign_id", "is_active"),
+        Index("ix_creatives_upload_time", "created_at"),
     )
 
-    def __repr__(self) -> str:
-        return f"<ABTest(id={self.id}, name={self.name!r}, campaign_id={self.campaign_id})>"
+
+# ---------------------------------------------------------------------------
+# RTB auction domain
+# ---------------------------------------------------------------------------
 
 
-class ABTestVariant(Base):
-    __tablename__ = "ab_test_variants"
+class AuctionRequest(Base):
+    __tablename__ = "auction_requests"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        SQLiteUUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    ab_test_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("ab_tests.id", ondelete="CASCADE"),
-        nullable=False,
+    campaign_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("campaigns.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    traffic_pct: Mapped[float] = mapped_column(Float, nullable=False)
-    conversions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    impressions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    clicks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    revenue: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    request_id: Mapped[str] = mapped_column(
+        String(255), unique=True, nullable=False, index=True
+    )
+    impression_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    ssp: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    floor_price: Mapped[float] = mapped_column(Float, nullable=False)
+    user_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, index=True
+    )
+    device_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    geo: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    context: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    latency_ms: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
 
-    ab_test: Mapped["ABTest"] = relationship("ABTest", back_populates="variants")
+    campaign: Mapped[Optional["Campaign"]] = relationship(
+        "Campaign", back_populates="auction_requests"
+    )
+    bids: Mapped[List["AuctionBid"]] = relationship(
+        "AuctionBid", back_populates="auction_request"
+    )
+    win: Mapped[Optional["AuctionWin"]] = relationship(
+        "AuctionWin", back_populates="auction_request"
+    )
 
     __table_args__ = (
-        Index("ix_ab_test_variant_ab_test_id", "ab_test_id"),
-        Index("ix_ab_test_variant_name", "name"),
+        Index("ix_auction_requests_created_at", "created_at"),
+        Index("ix_auction_requests_campaign_created", "campaign_id", "created_at"),
     )
 
-    def __repr__(self) -> str:
-        return f"<ABTestVariant(id={self.id}, ab_test_id={self.ab_test_id}, name={self.name!r})>"
+
+class AuctionBid(Base):
+    __tablename__ = "auction_bids"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    auction_request_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("auction_requests.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    campaign_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("campaigns.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    creative_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("creatives.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    dsp_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    bid_amount: Mapped[float] = mapped_column(Float, nullable=False)
+    ctr_estimate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    is_winner: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    auction_request: Mapped["AuctionRequest"] = relationship(
+        "AuctionRequest", back_populates="bids"
+    )
+    creative: Mapped[Optional["Creative"]] = relationship(
+        "Creative", back_populates="bids"
+    )
+
+    __table_args__ = (Index("ix_auction_bids_created_at", "created_at"),)
+
+
+class AuctionWin(Base):
+    __tablename__ = "auction_wins"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    auction_request_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("auction_requests.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("campaigns.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    creative_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("creatives.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    winning_bid: Mapped[float] = mapped_column(Float, nullable=False)
+    second_price: Mapped[float] = mapped_column(Float, nullable=False)
+    auction_type: Mapped[str] = mapped_column(
+        String(50), default="second_price", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    auction_request: Mapped["AuctionRequest"] = relationship(
+        "AuctionRequest", back_populates="win"
+    )
+
+    __table_args__ = (
+        Index("ix_auction_wins_campaign_created", "campaign_id", "created_at"),
+        UniqueConstraint("auction_request_id", name="uq_auction_wins_request"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# A/B testing domain
+# ---------------------------------------------------------------------------
+
+
+class Experiment(Base):
+    __tablename__ = "experiments"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    campaign_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("campaigns.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(50), default="draft", nullable=False, index=True
+    )  # draft, running, paused, completed
+    metric_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    traffic_allocation: Mapped[int] = mapped_column(
+        Integer, default=100, nullable=False
+    )  # percentage of eligible traffic
+    start_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    end_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    winner_variant_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("variants.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False),
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    campaign: Mapped[Optional["Campaign"]] = relationship(
+        "Campaign", back_populates="experiments"
+    )
+    variants: Mapped[List["Variant"]] = relationship(
+        "Variant", back_populates="experiment"
+    )
+    assignments: Mapped[List["Assignment"]] = relationship(
+        "Assignment", back_populates="experiment"
+    )
+    metrics: Mapped[List["ExperimentMetric"]] = relationship(
+        "ExperimentMetric", back_populates="experiment"
+    )
+
+    __table_args__ = (
+        Index("ix_experiments_status_dates", "status", "start_date", "end_date"),
+        Index("ix_experiments_campaign_status", "campaign_id", "status"),
+    )
+
+
+class Variant(Base):
+    __tablename__ = "variants"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    experiment_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("experiments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(
+        String(255), nullable=False
+    )  # control, treatment-A, ...
+    traffic_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    experiment: Mapped["Experiment"] = relationship(
+        "Experiment", back_populates="variants"
+    )
+    metrics: Mapped[List["ExperimentMetric"]] = relationship(
+        "ExperimentMetric", back_populates="variant"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("experiment_id", "name", name="uq_variant_experiment_name"),
+    )
+
+
+class Assignment(Base):
+    __tablename__ = "assignments"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    experiment_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("experiments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    variant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("variants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    bucket: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    experiment: Mapped["Experiment"] = relationship(
+        "Experiment", back_populates="assignments"
+    )
+    variant: Mapped["Variant"] = relationship("Variant")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "experiment_id", "user_id", name="uq_assignment_experiment_user"
+        ),
+        Index("ix_assignments_user_experiment", "user_id", "experiment_id"),
+    )
+
+
+class ExperimentMetric(Base):
+    __tablename__ = "experiment_metrics"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    experiment_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("experiments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    variant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("variants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    metric_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    metric_value: Mapped[float] = mapped_column(Float, nullable=False)
+    event_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    experiment: Mapped["Experiment"] = relationship(
+        "Experiment", back_populates="metrics"
+    )
+    variant: Mapped["Variant"] = relationship("Variant", back_populates="metrics")
+
+    __table_args__ = (
+        Index("ix_experiment_metrics_variant_metric", "variant_id", "metric_name"),
+        Index("ix_experiment_metrics_event_time", "event_time"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Attribution domain
+# ---------------------------------------------------------------------------
 
 
 class ConversionEvent(Base):
     __tablename__ = "conversion_events"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        SQLiteUUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    campaign_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("campaigns.id", ondelete="CASCADE"),
-        nullable=False,
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    campaign_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("campaigns.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     conversion_value: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     conversion_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=False), default=datetime.utcnow, nullable=False
     )
-    channel: Mapped[str] = mapped_column(String(100), nullable=False)
+    channel: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     device_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     geo: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    creative_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        ForeignKey("creatives.id", ondelete="SET NULL"),
-        nullable=True,
+    currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
+    metadata_: Mapped[dict] = mapped_column(
+        "metadata", JSON, default=dict, nullable=False
     )
 
     touchpoints: Mapped[List["Touchpoint"]] = relationship(
@@ -248,9 +806,8 @@ class ConversionEvent(Base):
     )
 
     __table_args__ = (
-        Index("ix_conversion_event_user_id", "user_id"),
-        Index("ix_conversion_event_campaign_id", "campaign_id"),
-        Index("ix_conversion_event_conversion_time", "conversion_time"),
+        Index("ix_conversion_events_user_time", "user_id", "conversion_time"),
+        Index("ix_conversion_events_campaign_time", "campaign_id", "conversion_time"),
     )
 
 
@@ -258,36 +815,52 @@ class Touchpoint(Base):
     __tablename__ = "touchpoints"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        SQLiteUUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     campaign_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
         ForeignKey("campaigns.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    creative_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("creatives.id", ondelete="SET NULL"),
+        nullable=True,
     )
     touchpoint_seq: Mapped[int] = mapped_column(Integer, nullable=False)
     channel: Mapped[str] = mapped_column(String(100), nullable=False)
-    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    event_type: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # impression, click, view
     event_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=False), default=datetime.utcnow, nullable=False
     )
     conversion_event_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
         ForeignKey("conversion_events.id", ondelete="SET NULL"),
         nullable=True,
+        index=True,
     )
+    cost: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
-    campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="touchpoints")
+    campaign: Mapped["Campaign"] = relationship(
+        "Campaign", back_populates="touchpoints"
+    )
     conversion_event: Mapped[Optional["ConversionEvent"]] = relationship(
         "ConversionEvent", back_populates="touchpoints"
     )
 
     __table_args__ = (
-        Index("ix_touchpoint_user_id", "user_id"),
-        Index("ix_touchpoint_campaign_id", "campaign_id"),
-        Index("ix_touchpoint_event_time", "event_time"),
-        Index("ix_touchpoint_user_campaign_seq", "user_id", "campaign_id", "touchpoint_seq"),
+        Index(
+            "ix_touchpoints_user_campaign_seq",
+            "user_id",
+            "campaign_id",
+            "touchpoint_seq",
+        ),
+        Index("ix_touchpoints_event_time", "event_time"),
+        Index("ix_touchpoints_conversion", "conversion_event_id"),
     )
 
 
@@ -295,16 +868,22 @@ class AttributionResult(Base):
     __tablename__ = "attribution_results"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        SQLiteUUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     conversion_event_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
         ForeignKey("conversion_events.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
-    model_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    model_type: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # shapley, linear, last_click, etc.
+    click_window_days: Mapped[int] = mapped_column(Integer, default=7, nullable=False)
+    view_window_days: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     channel_credits: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    campaign_credits: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     calculated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False), default=datetime.utcnow, nullable=False
     )
@@ -314,22 +893,31 @@ class AttributionResult(Base):
     )
 
     __table_args__ = (
-        Index("ix_attribution_result_conversion_event_id", "conversion_event_id"),
-        Index("ix_attribution_result_model_type", "model_type"),
+        Index(
+            "ix_attribution_results_conversion_model",
+            "conversion_event_id",
+            "model_type",
+        ),
+        Index("ix_attribution_results_calculated_at", "calculated_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Traffic quality domain
+# ---------------------------------------------------------------------------
 
 
 class TrafficQualityScore(Base):
     __tablename__ = "traffic_quality_scores"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        SQLiteUUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     campaign_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
         ForeignKey("campaigns.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
     date: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
     geo: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -341,13 +929,12 @@ class TrafficQualityScore(Base):
     bounce_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     dwell_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     interaction_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    flags: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    flags: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
     anomaly_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     __table_args__ = (
-        Index("ix_traffic_quality_score_campaign_id", "campaign_id"),
-        Index("ix_traffic_quality_score_date", "date"),
-        Index("ix_traffic_quality_score_campaign_date", "campaign_id", "date"),
+        Index("ix_traffic_quality_scores_campaign_date", "campaign_id", "date"),
+        Index("ix_traffic_quality_scores_date", "date"),
     )
 
 
@@ -355,13 +942,13 @@ class FraudAlert(Base):
     __tablename__ = "fraud_alerts"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        SQLiteUUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     campaign_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
         ForeignKey("campaigns.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
     alert_type: Mapped[str] = mapped_column(String(100), nullable=False)
     severity: Mapped[str] = mapped_column(String(20), default="warning", nullable=False)
@@ -369,27 +956,33 @@ class FraudAlert(Base):
     detected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False), default=datetime.utcnow, nullable=False
     )
-    status: Mapped[str] = mapped_column(String(20), default="open", nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), default="open", nullable=False, index=True
+    )
 
     __table_args__ = (
-        Index("ix_fraud_alert_campaign_id", "campaign_id"),
-        Index("ix_fraud_alert_status", "status"),
-        Index("ix_fraud_alert_detected_at", "detected_at"),
+        Index("ix_fraud_alerts_campaign_status", "campaign_id", "status"),
+        Index("ix_fraud_alerts_detected_at", "detected_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Dashboard / reporting
+# ---------------------------------------------------------------------------
 
 
 class DailyMetric(Base):
     __tablename__ = "daily_metrics"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        SQLiteUUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     date: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
     campaign_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
         ForeignKey("campaigns.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
     impressions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     clicks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -401,13 +994,155 @@ class DailyMetric(Base):
     cpc: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     roi: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
-    campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="daily_metrics")
-
-    __table_args__ = (
-        Index("ix_daily_metric_date", "date"),
-        Index("ix_daily_metric_campaign_id", "campaign_id"),
-        Index("ix_daily_metric_date_campaign", "date", "campaign_id"),
+    campaign: Mapped["Campaign"] = relationship(
+        "Campaign", back_populates="daily_metrics"
     )
 
-    def __repr__(self) -> str:
-        return f"<DailyMetric(id={self.id}, date={self.date}, campaign_id={self.campaign_id})>"
+    __table_args__ = (
+        Index("ix_daily_metrics_date_campaign", "date", "campaign_id"),
+        UniqueConstraint("date", "campaign_id", name="uq_daily_metric_date_campaign"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Agent domain
+# ---------------------------------------------------------------------------
+
+
+class AgentConfig(Base):
+    __tablename__ = "agent_configs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    goal: Mapped[str] = mapped_column(Text, nullable=False)
+    llm_provider: Mapped[str] = mapped_column(
+        String(50), default="openai", nullable=False
+    )
+    llm_model: Mapped[str] = mapped_column(
+        String(100), default="gpt-4o-mini", nullable=False
+    )
+    tools_enabled: Mapped[List[str]] = mapped_column(JSON, default=list, nullable=False)
+    max_steps: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False),
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="agent_configs")
+    runs: Mapped[List["AgentRun"]] = relationship("AgentRun", back_populates="config")
+
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    config_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("agent_configs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(50), default="running", nullable=False
+    )  # running, completed, failed
+    goal: Mapped[str] = mapped_column(Text, nullable=False)
+    final_output: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    step_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    latency_ms: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    config: Mapped["AgentConfig"] = relationship("AgentConfig", back_populates="runs")
+    user: Mapped["User"] = relationship("User", back_populates="agent_runs")
+    steps: Mapped[List["AgentStep"]] = relationship("AgentStep", back_populates="run")
+
+
+class AgentStep(Base):
+    __tablename__ = "agent_steps"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("agent_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    step_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    phase: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # think, act, observe
+    thought: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tool_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    tool_input: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    tool_output: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    latency_ms: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    run: Mapped["AgentRun"] = relationship("AgentRun", back_populates="steps")
+
+    __table_args__ = (
+        UniqueConstraint("run_id", "step_number", name="uq_agent_step_run_number"),
+    )
+
+
+class AgentMemory(Base):
+    __tablename__ = "agent_memories"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("agent_runs.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[List[float]] = mapped_column(Vector(1536), nullable=False)
+    memory_type: Mapped[str] = mapped_column(
+        String(50), default="observation", nullable=False
+    )
+    metadata_: Mapped[dict] = mapped_column(
+        "metadata", JSON, default=dict, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_agent_memories_user_type", "user_id", "memory_type"),
+        Index("ix_agent_memories_created_at", "created_at"),
+    )
