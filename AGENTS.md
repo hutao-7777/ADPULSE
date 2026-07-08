@@ -6,7 +6,7 @@ AdPulse is a **full-stack demonstrative platform for programmatic advertising**.
 
 The codebase is split into a Python/FastAPI backend (`backend/`) and a React/TypeScript frontend (`frontend/`), containerized together via Docker Compose.
 
-> **Important current state:** The repository contains PostgreSQL-oriented models and an Alembic migration, but the runnable stack uses SQLite. Legacy model names (`Auction`, `BidRecord`, `ABTest`, `ABTestVariant`) have been restored alongside the new PostgreSQL-oriented tables so that the existing API, services, and seed data can import and run. The backend now imports successfully and the test suite passes.
+> **Important current state:** The repository contains PostgreSQL-oriented models and an Alembic migration, but the runnable stack uses SQLite. Legacy model names (`Auction`, `BidRecord`, `ABTest`, `ABTestVariant`) coexist with the new PostgreSQL-oriented tables. The backend now includes JWT/RBAC authentication, API key access, and production-oriented v2 engines (RTB, A/B testing, attribution, agent). All backend tests pass and the code quality pipeline (black/isort/flake8/mypy) is clean.
 
 ## Tech Stack
 
@@ -21,11 +21,13 @@ The codebase is split into a Python/FastAPI backend (`backend/`) and a React/Typ
 - **pytest** + **pytest-asyncio** + **httpx** + **pytest-cov**
 - Code quality tools in `pyproject.toml`: **black**, **isort**, **flake8**, **mypy**
 
-Dependencies that are installed but **not currently used by application code**:
-- `asyncpg`, `pgvector` (PostgreSQL/pgvector target only)
-- `redis`
-- `python-jose`, `passlib` (auth models exist but no endpoints or middleware use them)
-- `openai`, `anthropic` (no LLM calls in the agent loop; the loop is rule-based)
+Dependencies that are installed but **optional or PostgreSQL-only**:
+- `asyncpg`, `pgvector` (used only when `DATABASE_URL` points to PostgreSQL)
+- `redis` (used when `REDIS_URL` is configured; otherwise falls back to a no-op client)
+
+Dependencies now used by application code:
+- `python-jose`, `passlib`, `bcrypt` for JWT access/refresh tokens and password/API-key hashing
+- `openai`, `anthropic` for real LLM function calling in the v2 agent (fallback to deterministic output when no API key is configured)
 
 ### Frontend
 
@@ -59,19 +61,29 @@ adpulse/
 │   │   ├── main.py             # FastAPI application and lifespan
 │   │   ├── agent/              # ReAct bidding agent logic
 │   │   │   ├── bidding_agent.py
+│   │   │   ├── bidding_agent_v2.py
+│   │   │   ├── llm_client.py
+│   │   │   ├── memory_store.py
 │   │   │   └── tools.py
 │   │   ├── api/                # FastAPI routers
 │   │   │   ├── abtest.py
+│   │   │   ├── abtest_v2.py
 │   │   │   ├── agent.py
+│   │   │   ├── agent_v2.py
 │   │   │   ├── attribution.py
+│   │   │   ├── attribution_v2.py
+│   │   │   ├── auth.py
 │   │   │   ├── dashboard.py
 │   │   │   ├── rtb.py
+│   │   │   ├── rtb_v2.py
 │   │   │   └── traffic.py
-│   │   ├── core/               # Config, DB, response envelope, seed
+│   │   ├── core/               # Config, DB, response envelope, seed, security
 │   │   │   ├── config.py
 │   │   │   ├── database.py
 │   │   │   ├── exceptions.py
+│   │   │   ├── redis.py
 │   │   │   ├── response.py
+│   │   │   ├── security.py
 │   │   │   └── seed.py
 │   │   ├── models/             # SQLAlchemy models (single file)
 │   │   │   └── models.py
@@ -82,14 +94,20 @@ adpulse/
 │   │   │   ├── dashboard.py
 │   │   │   ├── rtb.py
 │   │   │   └── traffic.py
-│   │   └── services/           # Business engines
-│   │       ├── ab_test_engine.py
-│   │       ├── attribution_engine.py
-│   │       ├── rtb_engine.py
-│   │       └── traffic_quality_engine.py
+│   │   ├── services/           # Business engines
+│   │   │   ├── ab_test_engine.py
+│   │   │   ├── ab_test_v2_engine.py
+│   │   │   ├── attribution_engine.py
+│   │   │   ├── attribution_v2_engine.py
+│   │   │   ├── auth_service.py
+│   │   │   ├── rtb_engine.py
+│   │   │   ├── rtb_v2_engine.py
+│   │   │   └── traffic_quality_engine.py
+│   │   └── main.py             # FastAPI application and lifespan
 │   ├── tests/
 │   │   ├── conftest.py         # In-memory SQLite test DB fixture
-│   │   └── test_api.py         # Integration tests
+│   │   ├── test_api.py         # Legacy endpoint integration tests
+│   │   └── test_v2.py          # Auth and v2 endpoint/service tests
 │   ├── Dockerfile
 │   ├── adpulse.db              # Local SQLite database (created at runtime)
 │   ├── pyproject.toml          # Tool config for black/isort/mypy/flake8
@@ -188,13 +206,13 @@ cd backend
 source venv/bin/activate      # Windows: venv\Scripts\activate
 
 # Run tests
-pytest tests/test_api.py -v
+pytest tests/ -v
 
 # Code formatting / linting
 black app tests
 isort app tests
 flake8 app tests
-mypy app
+mypy app tests
 ```
 
 ### Frontend
@@ -220,14 +238,15 @@ npm run lint
 
 - All API responses are wrapped as `{code, message, data}` by `app.core.response.WrappedAPIRouter`.
 - Exceptions are handled by `app.core.response.register_exception_handlers` and return the same envelope.
-- Business-domain routers live in `app/api/` and are registered in `app/main.py`.
+- Business-domain routers live in `app/api/` and are registered in `app/main.py`. V2 routers are mounted under `/api/v2/*`.
+- Auth routes live in `app/api/auth.py`; protected endpoints use `get_current_active_user`, `require_permission`, or `validate_api_key`.
 - ORM primary keys use `uuid.UUID` with `default=uuid.uuid4`.
 - `datetime` fields use `datetime.utcnow`.
 - SQLAlchemy 2.0 style with `Mapped` / `mapped_column` type hints.
 - RTB monetary values are stored as **per-impression** prices. CPM values are converted with `cpm / 1000` for storage and `price * 1000` for display.
 - A/B test assignment uses consistent hashing (`hashlib.md5`) so the same user always sees the same variant; non-experiment traffic is routed to `control`.
 - The attribution engine supports First Touch, Last Touch, Linear, Time Decay, Position Based, and Shapley approximation.
-- The bidding agent follows a ReAct loop (`think -> act -> observe`) and each step is returned in a structured format for frontend visualization.
+- The bidding agent follows a ReAct loop (`think -> act -> observe`) and each step is returned in a structured format for frontend visualization. The v2 agent can call OpenAI/Anthropic function calling with pgvector memory.
 
 ## Code Style Guidelines
 
@@ -238,10 +257,9 @@ npm run lint
 
 ## Testing Instructions
 
-- Backend tests are in `backend/tests/test_api.py` and use an in-memory SQLite database configured in `backend/tests/conftest.py`.
+- Backend tests are in `backend/tests/test_api.py` and `backend/tests/test_v2.py` and use an in-memory SQLite database configured in `backend/tests/conftest.py`.
 - `pytest.ini` sets `asyncio_mode = auto`.
-- CI runs `pytest tests/test_api.py -v` for the backend and `npm run build` for the frontend.
-- Because of the current model-name mismatch, the test suite cannot import successfully until the models and imports are reconciled.
+- CI runs `pytest tests/ -v` for the backend and `npm run build` for the frontend.
 
 ## Deployment
 
@@ -253,24 +271,22 @@ npm run lint
 
 ## Security Considerations
 
-- There is **no authentication or authorization** in the current application. User/Role/Permission/ApiKey models exist in `app/models/models.py`, but no endpoints, dependencies, or middleware use them.
-- CORS origins are configurable via the `CORS_ORIGINS` environment variable. The default in `app/core/config.py` is a comma-separated allow-list, but `docker-compose.yml` currently sets `CORS_ORIGINS=["*"]`.
-- `SECRET_KEY` defaults to a placeholder value (`change-me-in-production`) and is not used for any runtime logic today.
+- Authentication and authorization are now implemented via JWT access/refresh tokens, RBAC permissions, and API keys (`app/core/security.py`, `app/services/auth_service.py`, `app/api/auth.py`).
+- CORS origins are configurable via the `CORS_ORIGINS` environment variable. The default in `app/core/config.py` is a comma-separated allow-list; `docker-compose.yml` currently sets `CORS_ORIGINS=["*"]`.
+- `SECRET_KEY` is used to sign JWTs; set a strong value in production.
 - Uploaded files are stored under `backend/uploads/`.
 - Treat `.env` values as sensitive and do not commit the file.
 
 ## Known Issues / Important Notes
 
-1. **Model / import mismatch (resolved).** Legacy model names (`Auction`, `BidRecord`, `ABTest`, `ABTestVariant`) now coexist with the new PostgreSQL-oriented tables (`AuctionRequest`, `AuctionBid`, `AuctionWin`, `Experiment`, `Variant`). The backend imports successfully and tests pass.
+1. **Model coexistence.** Legacy model names (`Auction`, `BidRecord`, `ABTest`, `ABTestVariant`) coexist with the new PostgreSQL-oriented tables (`AuctionRequest`, `AuctionBid`, `AuctionWin`, `Experiment`, `Variant`). Legacy endpoints use the old tables; v2 endpoints use the new tables.
 
-2. **Runtime DB target.** `app/core/config.py` now defaults to SQLite. PostgreSQL and Redis are wired in dependencies and configuration but are not used at runtime yet.
+2. **Runtime DB target.** `app/core/config.py` defaults to SQLite. PostgreSQL and Redis are wired in dependencies and configuration but are optional: Redis falls back to a no-op client and LLM calls fall back to deterministic output when no API key is configured.
 
 3. **Alembic is not invoked at startup.** `app/main.py` calls `Base.metadata.create_all()` in the lifespan, so migrations are bypassed. The existing migration targets PostgreSQL and will not work with SQLite.
 
-4. **Agent LLM integration is stubbed.** The `agent/` module implements a deterministic ReAct loop; no OpenAI/Anthropic client is instantiated.
+4. **Frontend `lint` script references missing package.** `eslint` is used in `package.json` scripts but is not listed in `devDependencies`.
 
-5. **Frontend `lint` script references missing package.** `eslint` is used in `package.json` scripts but is not listed in `devDependencies`.
+5. **Unused file.** `frontend/src/pages/Agent.tsx` exists but is not wired into `App.tsx`; `/agent` uses `AgentLoop.tsx`.
 
-6. **Unused file.** `frontend/src/pages/Agent.tsx` exists but is not wired into `App.tsx`; `/agent` uses `AgentLoop.tsx`.
-
-When modifying this project, reconcile the model names with the API/service imports first, and decide whether the runtime target should remain SQLite or be migrated to PostgreSQL.
+When modifying this project, keep the legacy/v2 model split in mind and decide whether the runtime target should remain SQLite or be migrated to PostgreSQL.
