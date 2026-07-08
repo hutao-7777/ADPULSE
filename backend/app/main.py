@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.core.database import engine, Base
 from app.core.seed import seed_data
 from app.api import attribution, rtb, dashboard, abtest, agent, traffic
+from app.core.response import register_exception_handlers
 
 
 @asynccontextmanager
@@ -31,6 +32,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+register_exception_handlers(app)
 
 app.include_router(attribution.router)
 app.include_router(traffic.router)

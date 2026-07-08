@@ -2,7 +2,8 @@
 
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import HTTPException, status
+from app.core.response import APIRouter
 
 from app.agent.bidding_agent import BiddingAgent
 from app.schemas.agent import (

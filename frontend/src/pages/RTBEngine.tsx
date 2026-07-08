@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 
 import { apiRequest } from '../utils/api';
+import { cn } from '../utils/cn';
 
 // ------------------------------------------------------------------
 // 类型定义
@@ -103,9 +104,7 @@ const DSP_META: Record<string, { label: string; color: string; border: string; b
   DSP_C: { label: 'DSP_C', color: '#F97316', border: 'border-orange-500', bg: 'bg-orange-500/10' },
 };
 
-function cn(...classes: (string | false | undefined)[]) {
-  return classes.filter(Boolean).join(' ');
-}
+
 
 function formatCpm(value: number): string {
   return `¥${(value * 1000).toFixed(2)}`;

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 
 from app.api import abtest, agent, attribution, dashboard, rtb, traffic
 from app.core.database import Base, get_db
+from app.core.response import register_exception_handlers
 from app.core.seed import seed_data
 
 
@@ -46,6 +47,7 @@ async def client():
         await test_engine.dispose()
 
     test_app = FastAPI(lifespan=lifespan)
+    register_exception_handlers(test_app)
     test_app.include_router(attribution.router)
     test_app.include_router(traffic.router)
     test_app.include_router(rtb.router)

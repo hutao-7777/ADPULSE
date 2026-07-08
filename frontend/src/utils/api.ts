@@ -1,5 +1,11 @@
 const API_BASE = 'http://localhost:8000/api';
 
+interface ApiEnvelope<T> {
+  code: number;
+  message: string;
+  data: T;
+}
+
 export async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
@@ -20,23 +26,36 @@ export async function apiRequest<T>(
 
   const response = await fetch(url, config);
 
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
+  // Handle unified backend envelope { code, message, data }
+  const isEnvelope =
+    payload &&
+    typeof payload === 'object' &&
+    'code' in payload &&
+    'message' in payload &&
+    'data' in payload;
+
+  if (isEnvelope) {
+    const envelope = payload as ApiEnvelope<T>;
+    if (!response.ok || envelope.code !== 0) {
+      throw new Error(envelope.message || `HTTP ${response.status}`);
+    }
+    return envelope.data;
+  }
+
   if (!response.ok) {
     let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-    try {
-      const errorData = await response.json();
-      if (errorData.detail) {
-        errorMessage = errorData.detail;
-      }
-    } catch {
-      // ignore non-JSON error bodies
+    if (payload && typeof payload === 'object' && 'detail' in payload) {
+      errorMessage = String((payload as { detail: unknown }).detail);
     }
     throw new Error(errorMessage);
   }
 
-  // Handle 204 No Content
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return response.json() as Promise<T>;
+  return payload as T;
 }

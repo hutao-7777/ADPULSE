@@ -16,6 +16,7 @@ import {
 import { ArrowDown, ArrowUp, Activity, TrendingUp } from 'lucide-react';
 
 import { apiRequest } from '../utils/api';
+import { cn } from '../utils/cn';
 
 // ------------------------------------------------------------------
 // 类型定义
@@ -183,10 +184,6 @@ function formatValue(value: number, unit: string): string {
   if (unit === '¥') return `¥${value.toFixed(2)}`;
   if (unit === '%') return `${value.toFixed(2)}%`;
   return `${value.toFixed(2)}${unit}`;
-}
-
-function cn(...classes: (string | false | undefined)[]) {
-  return classes.filter(Boolean).join(' ');
 }
 
 // ------------------------------------------------------------------

@@ -26,7 +26,7 @@ async def test_single_auction(client):
     }
     response = await client.post("/api/rtb/auction/single", json=payload)
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["data"]
     assert "impression_id" in data
     assert "bids" in data
     assert "winner" in data
@@ -43,7 +43,7 @@ async def test_batch_auction(client):
     }
     response = await client.post("/api/rtb/auction/batch", json=payload)
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["data"]
     assert data["count"] == 100
     assert len(data["results"]) == 100
     stats = data["stats"]
@@ -68,19 +68,19 @@ async def test_abtest_flow(client):
     }
     create_res = await client.post("/api/abtests", json=create_payload)
     assert create_res.status_code == 201
-    test_data = create_res.json()
+    test_data = create_res.json()["data"]
     test_id = test_data["id"]
     assert test_data["status"] == "draft"
 
     start_res = await client.post(f"/api/abtests/{test_id}/start")
     assert start_res.status_code == 200
-    assert start_res.json()["status"] == "running"
+    assert start_res.json()["data"]["status"] == "running"
 
     assign_res = await client.post(
         f"/api/abtests/{test_id}/assign", json={"user_id": "user-integration-001"}
     )
     assert assign_res.status_code == 200
-    assignment = assign_res.json()
+    assignment = assign_res.json()["data"]
     assert assignment["in_experiment"] is True
     variant = assignment["variant"]
     assert variant in {"control", "red_cta"}
@@ -101,7 +101,7 @@ async def test_abtest_flow(client):
 
     results_res = await client.get(f"/api/abtests/{test_id}/results")
     assert results_res.status_code == 200
-    results_data = results_res.json()
+    results_data = results_res.json()["data"]
     assert "test_info" in results_data
     assert "variants" in results_data
     assert "recommendation" in results_data
@@ -117,7 +117,7 @@ async def test_agent_loop(client):
         json={"max_iterations": 3},
     )
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["data"]
     assert data["campaign_id"] == campaign_id
     assert "iterations" in data
     assert len(data["iterations"]) > 0
@@ -179,7 +179,7 @@ async def test_attribution_flow(client):
         json={"conversion_value": 100.0},
     )
     assert calc_res.status_code == 200
-    calc_data = calc_res.json()
+    calc_data = calc_res.json()["data"]
     assert "journey" in calc_data
     assert "models" in calc_data
     assert "model_credits" in calc_data
@@ -189,7 +189,7 @@ async def test_attribution_flow(client):
     # Model comparison aggregation
     comparison_res = await client.get("/api/attribution/model-comparison")
     assert comparison_res.status_code == 200
-    comparison_data = comparison_res.json()
+    comparison_data = comparison_res.json()["data"]
     assert "comparisons" in comparison_data
     assert len(comparison_data["comparisons"]) > 0
 
@@ -214,7 +214,7 @@ async def test_traffic_assess(client):
         json={"campaign_id": campaign_id, "raw_metrics": raw_metrics},
     )
     assert assess_res.status_code == 201
-    score = assess_res.json()
+    score = assess_res.json()["data"]
     assert "quality_score" in score
     assert "grade" in score
     assert 0 <= score["quality_score"] <= 100
@@ -222,11 +222,11 @@ async def test_traffic_assess(client):
 
     quality_res = await client.get(f"/api/traffic/quality/{campaign_id}")
     assert quality_res.status_code == 200
-    assert quality_res.json()["campaign_id"] == campaign_id
+    assert quality_res.json()["data"]["campaign_id"] == campaign_id
 
     trend_res = await client.get(f"/api/traffic/trend/{campaign_id}")
     assert trend_res.status_code == 200
-    assert "trend" in trend_res.json()
+    assert "trend" in trend_res.json()["data"]
 
     alerts_res = await client.get(f"/api/traffic/alerts/{campaign_id}")
     assert alerts_res.status_code == 200
