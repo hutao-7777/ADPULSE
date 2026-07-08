@@ -1,16 +1,19 @@
 """Production A/B testing API endpoints (v2)."""
 
 import uuid
-from typing import Any
+from datetime import datetime
+from typing import Any, List
 
 from fastapi import Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.response import APIRouter
 from app.core.security import require_permission
-from app.models.models import Experiment, User
+from app.models.models import Experiment, ExperimentMetric, User, Variant
 from app.services.ab_test_v2_engine import ABTestV2Engine
 
 router = APIRouter(prefix="/api/v2/abtests", tags=["abtest-v2"])
@@ -33,6 +36,227 @@ class MetricRecordRequest(BaseModel):
     variant_name: str
     metric_name: str
     metric_value: float
+
+
+class ExperimentVariantCreate(BaseModel):
+    name: str = Field(..., min_length=1)
+    config: dict = Field(default_factory=dict)
+    traffic_allocation: int = Field(..., ge=0, le=100)
+
+
+class ExperimentCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: str | None = None
+    traffic_split: int = Field(..., ge=1, le=99)
+    variants: List[ExperimentVariantCreate] = Field(..., min_length=2)
+    success_metric: str = Field(..., pattern="^(conversion_rate|ctr|revenue)$")
+    min_sample_size: int | None = Field(None, ge=1)
+    max_duration_days: int | None = Field(None, ge=1)
+
+    @model_validator(mode="after")
+    def check_variants(self) -> "ExperimentCreateRequest":
+        names = [v.name for v in self.variants]
+        if len(names) != len(set(names)):
+            raise ValueError("Variant names must be unique")
+        total = sum(v.traffic_allocation for v in self.variants)
+        if total != 100:
+            raise ValueError("Variant traffic allocations must sum to 100")
+        return self
+
+
+class ExperimentVariantResponse(BaseModel):
+    id: str
+    name: str
+    config: dict
+    traffic_allocation: int
+    created_at: datetime
+
+
+class ExperimentResponse(BaseModel):
+    id: str
+    name: str
+    description: str | None
+    status: str
+    traffic_split: int
+    success_metric: str
+    min_sample_size: int | None
+    max_duration_days: int | None
+    start_date: datetime | None
+    end_date: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    variants: List[ExperimentVariantResponse]
+
+
+class ExperimentStatusUpdate(BaseModel):
+    status: str = Field(..., pattern="^(draft|running|paused|stopped)$")
+
+
+class ExperimentEventRequest(BaseModel):
+    user_id: str = Field(..., min_length=1)
+    event_type: str = Field(..., pattern="^(exposure|conversion)$")
+    variant_name: str = Field(..., min_length=1)
+    metadata: dict = Field(default_factory=dict)
+
+
+class ExperimentEventResponse(BaseModel):
+    status: str
+
+
+@router.post("", response_model=ExperimentResponse, status_code=status.HTTP_201_CREATED)
+async def create_experiment(
+    request: ExperimentCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("campaign:write")),
+) -> dict[str, Any]:
+    """Create a new A/B experiment with variants."""
+    experiment = Experiment(
+        id=uuid.uuid4(),
+        name=request.name,
+        description=request.description,
+        status="draft",
+        metric_name=request.success_metric,
+        traffic_allocation=request.traffic_split,
+        min_sample_size=request.min_sample_size,
+        max_duration_days=request.max_duration_days,
+    )
+    db.add(experiment)
+    await db.flush()
+
+    for variant_in in request.variants:
+        variant = Variant(
+            id=uuid.uuid4(),
+            experiment_id=experiment.id,
+            name=variant_in.name,
+            traffic_pct=variant_in.traffic_allocation / 100.0,
+            config=variant_in.config,
+        )
+        db.add(variant)
+
+    await db.commit()
+
+    result = await db.execute(
+        select(Experiment)
+        .where(Experiment.id == experiment.id)
+        .options(selectinload(Experiment.variants))
+    )
+    experiment = result.scalar_one()
+    return _experiment_to_response(experiment)
+
+
+@router.patch(
+    "/{experiment_id}/status",
+    response_model=ExperimentResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_experiment_status(
+    experiment_id: uuid.UUID,
+    request: ExperimentStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("campaign:write")),
+) -> dict[str, Any]:
+    """Transition an experiment between draft/running/paused/stopped."""
+    experiment = await db.get(Experiment, experiment_id)
+    if experiment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Experiment not found"
+        )
+
+    current = experiment.status
+    new = request.status
+
+    allowed_transitions = {
+        "draft": {"running", "stopped"},
+        "running": {"paused", "stopped"},
+        "paused": {"running", "stopped"},
+        "stopped": set(),
+    }
+
+    if new not in allowed_transitions.get(current, set()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid status transition from {current} to {new}",
+        )
+
+    if new == "running" and current == "draft":
+        if experiment.min_sample_size is None or experiment.max_duration_days is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "min_sample_size and max_duration_days must be set before running"
+                ),
+            )
+        experiment.start_date = datetime.utcnow()
+
+    if new == "stopped":
+        experiment.end_date = datetime.utcnow()
+
+    experiment.status = new
+    await db.commit()
+
+    result = await db.execute(
+        select(Experiment)
+        .where(Experiment.id == experiment.id)
+        .options(selectinload(Experiment.variants))
+    )
+    experiment = result.scalar_one()
+    return _experiment_to_response(experiment)
+
+
+@router.post(
+    "/{experiment_id}/record",
+    response_model=ExperimentEventResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def record_experiment_event(
+    experiment_id: uuid.UUID,
+    request: ExperimentEventRequest,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("campaign:write")),
+) -> dict[str, str]:
+    """Record an exposure or conversion event for a user/variant."""
+    experiment = await db.get(Experiment, experiment_id)
+    if experiment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Experiment not found"
+        )
+
+    variant_result = await db.execute(
+        select(Variant)
+        .where(Variant.experiment_id == experiment_id)
+        .where(Variant.name == request.variant_name)
+    )
+    variant = variant_result.scalar_one_or_none()
+    if variant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Variant {request.variant_name} not found",
+        )
+
+    metric_name = request.event_type
+
+    if request.event_type == "exposure":
+        existing = await db.execute(
+            select(ExperimentMetric)
+            .where(ExperimentMetric.experiment_id == experiment_id)
+            .where(ExperimentMetric.user_id == request.user_id)
+            .where(ExperimentMetric.metric_name == metric_name)
+        )
+        if existing.scalar_one_or_none() is not None:
+            return {"status": "recorded"}
+
+    metric = ExperimentMetric(
+        id=uuid.uuid4(),
+        experiment_id=experiment_id,
+        variant_id=variant.id,
+        user_id=request.user_id,
+        metric_name=metric_name,
+        metric_value=1.0,
+        event_time=datetime.utcnow(),
+    )
+    db.add(metric)
+    await db.commit()
+    return {"status": "recorded"}
 
 
 @router.post("/{experiment_id}/assign", response_model=AssignmentResponse)
@@ -91,3 +315,30 @@ async def analyze_experiment(
             status_code=status.HTTP_404_NOT_FOUND, detail="Experiment not found"
         )
     return await engine.analyze(db, experiment_id, metric_name)
+
+
+def _experiment_to_response(experiment: Experiment) -> dict[str, Any]:
+    return {
+        "id": str(experiment.id),
+        "name": experiment.name,
+        "description": experiment.description,
+        "status": experiment.status,
+        "traffic_split": experiment.traffic_allocation,
+        "success_metric": experiment.metric_name,
+        "min_sample_size": experiment.min_sample_size,
+        "max_duration_days": experiment.max_duration_days,
+        "start_date": experiment.start_date,
+        "end_date": experiment.end_date,
+        "created_at": experiment.created_at,
+        "updated_at": experiment.updated_at,
+        "variants": [
+            {
+                "id": str(v.id),
+                "name": v.name,
+                "config": v.config,
+                "traffic_allocation": int(round(v.traffic_pct * 100)),
+                "created_at": v.created_at,
+            }
+            for v in experiment.variants
+        ],
+    }

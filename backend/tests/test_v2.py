@@ -169,3 +169,159 @@ async def test_attribution_v2_compare_models():
     comparison = engine.compare_models(touchpoints, 1.0, 7, 1)
     assert "first_touch" in comparison
     assert "shapley" in comparison
+
+
+async def test_ab_v2_experiment_lifecycle(client):
+    admin = await _login_admin(client)
+    token = admin["access_token"]
+
+    create_resp = await client.post(
+        "/api/v2/abtests",
+        json={
+            "name": "cta_button_color_2024",
+            "description": "测试CTA按钮颜色对转化率的影响",
+            "traffic_split": 50,
+            "variants": [
+                {
+                    "name": "control",
+                    "config": {"button_color": "blue"},
+                    "traffic_allocation": 50,
+                },
+                {
+                    "name": "treatment",
+                    "config": {"button_color": "red"},
+                    "traffic_allocation": 50,
+                },
+            ],
+            "success_metric": "conversion_rate",
+            "min_sample_size": 100,
+            "max_duration_days": 14,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert create_resp.status_code == 201
+    experiment = _unwrap(create_resp)
+    assert experiment["status"] == "draft"
+    assert len(experiment["variants"]) == 2
+    exp_id = experiment["id"]
+
+    # Invalid: allocations do not sum to 100
+    invalid = await client.post(
+        "/api/v2/abtests",
+        json={
+            "name": "bad",
+            "traffic_split": 50,
+            "variants": [
+                {"name": "a", "traffic_allocation": 30},
+                {"name": "b", "traffic_allocation": 60},
+            ],
+            "success_metric": "conversion_rate",
+            "min_sample_size": 100,
+            "max_duration_days": 14,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert invalid.status_code == 422
+
+    # Start experiment
+    start = await client.patch(
+        f"/api/v2/abtests/{exp_id}/status",
+        json={"status": "running"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert start.status_code == 200
+    assert _unwrap(start)["status"] == "running"
+
+    # Record exposure and conversion
+    record = await client.post(
+        f"/api/v2/abtests/{exp_id}/record",
+        json={
+            "user_id": "user-1",
+            "event_type": "exposure",
+            "variant_name": "control",
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert record.status_code == 201
+
+    # Duplicate exposure should be silently accepted
+    dup = await client.post(
+        f"/api/v2/abtests/{exp_id}/record",
+        json={
+            "user_id": "user-1",
+            "event_type": "exposure",
+            "variant_name": "control",
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert dup.status_code == 201
+
+    conversion = await client.post(
+        f"/api/v2/abtests/{exp_id}/record",
+        json={
+            "user_id": "user-1",
+            "event_type": "conversion",
+            "variant_name": "control",
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert conversion.status_code == 201
+
+    # Pause / resume / stop
+    paused = await client.patch(
+        f"/api/v2/abtests/{exp_id}/status",
+        json={"status": "paused"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert paused.status_code == 200
+
+    resumed = await client.patch(
+        f"/api/v2/abtests/{exp_id}/status",
+        json={"status": "running"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resumed.status_code == 200
+
+    stopped = await client.patch(
+        f"/api/v2/abtests/{exp_id}/status",
+        json={"status": "stopped"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert stopped.status_code == 200
+
+    # Cannot restart a stopped experiment
+    restart = await client.patch(
+        f"/api/v2/abtests/{exp_id}/status",
+        json={"status": "running"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert restart.status_code == 400
+
+
+async def test_ab_v2_status_transition_validation(client):
+    admin = await _login_admin(client)
+    token = admin["access_token"]
+
+    create_resp = await client.post(
+        "/api/v2/abtests",
+        json={
+            "name": "incomplete",
+            "traffic_split": 50,
+            "variants": [
+                {"name": "a", "traffic_allocation": 50},
+                {"name": "b", "traffic_allocation": 50},
+            ],
+            "success_metric": "ctr",
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert create_resp.status_code == 201
+    exp_id = _unwrap(create_resp)["id"]
+
+    # Missing min_sample_size / max_duration_days
+    bad = await client.patch(
+        f"/api/v2/abtests/{exp_id}/status",
+        json={"status": "running"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert bad.status_code == 400

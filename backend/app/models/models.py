@@ -632,6 +632,8 @@ class Experiment(Base):
     traffic_allocation: Mapped[int] = mapped_column(
         Integer, default=100, nullable=False
     )  # percentage of eligible traffic
+    min_sample_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_duration_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     start_date: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=False), nullable=True
     )

@@ -119,12 +119,18 @@ async def http_exception_handler(_request: Request, exc: Exception):
 
 async def validation_exception_handler(_request: Request, exc: Exception):
     val_exc = cast(RequestValidationError, exc)
+    # Pydantic v2 error ``ctx`` may contain non-JSON-serializable objects
+    # (e.g. the original ValueError from a model_validator). Strip those.
+    safe_errors = [
+        {"type": e.get("type"), "loc": e.get("loc"), "msg": e.get("msg")}
+        for e in val_exc.errors()
+    ]
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=ApiResponse.error(
             422,
             "请求参数校验失败",
-            val_exc.errors(),
+            safe_errors,
         ),
     )
 

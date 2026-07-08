@@ -1,8 +1,8 @@
 """initial_schema
 
-Revision ID: b7a11018ac19
+Revision ID: 6a1c20f2a2b7
 Revises: 
-Create Date: 2026-07-09 02:33:05.351464
+Create Date: 2026-07-09 02:40:41.439139
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'b7a11018ac19'
+revision: str = '6a1c20f2a2b7'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -45,6 +45,8 @@ def upgrade() -> None:
     sa.Column('status', sa.String(length=50), nullable=False),
     sa.Column('metric_name', sa.String(length=100), nullable=False),
     sa.Column('traffic_allocation', sa.Integer(), nullable=False),
+    sa.Column('min_sample_size', sa.Integer(), nullable=True),
+    sa.Column('max_duration_days', sa.Integer(), nullable=True),
     sa.Column('start_date', sa.DateTime(), nullable=True),
     sa.Column('end_date', sa.DateTime(), nullable=True),
     sa.Column('winner_variant_id', sa.Uuid(), nullable=True),
