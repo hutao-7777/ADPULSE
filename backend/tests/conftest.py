@@ -56,6 +56,12 @@ async def client():
     test_app.include_router(agent.router)
     test_app.dependency_overrides[get_db] = override_get_db
 
+    # Agent tools open their own sessions via AsyncSessionLocal; redirect them
+    # to the in-memory test database so tests do not depend on adpulse.db.
+    import app.agent.tools as tools_module
+
+    tools_module.AsyncSessionLocal = TestSessionLocal
+
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=test_app),
         base_url="http://test",
