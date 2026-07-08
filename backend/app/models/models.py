@@ -8,7 +8,6 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -24,6 +23,17 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
 )
+
+from app.core.config import settings
+
+# pgvector is only used for PostgreSQL deployments. SQLite uses JSON to store
+# the embedding vector (vector similarity search is not supported on SQLite).
+if settings.is_postgres:
+    from pgvector.sqlalchemy import Vector
+
+    _EmbeddingType = Vector(1536)
+else:
+    _EmbeddingType = JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -1147,7 +1157,7 @@ class AgentMemory(Base):
         index=True,
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[List[float]] = mapped_column(Vector(1536), nullable=False)
+    embedding: Mapped[List[float]] = mapped_column(_EmbeddingType, nullable=False)
     memory_type: Mapped[str] = mapped_column(
         String(50), default="observation", nullable=False
     )

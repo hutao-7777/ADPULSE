@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # Agent memory.
     AGENT_MEMORY_TOP_K: int = 5
 
+    # Migration control: when true, main.py skips create_all and expects
+    # ``alembic upgrade head`` to have been run externally.
+    USE_ALEMBIC: bool = False
+
     @property
     def cors_origins_list(self) -> list[str]:
         """Return CORS_ORIGINS as a list of strings."""

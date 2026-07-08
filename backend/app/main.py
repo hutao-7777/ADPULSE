@@ -1,9 +1,12 @@
 """AdPulse FastAPI application entrypoint."""
 
 from contextlib import asynccontextmanager
+from typing import cast
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api import (
     abtest,
@@ -25,12 +28,44 @@ from app.core.response import register_exception_handlers
 from app.core.seed import seed_data
 
 
+async def _database_is_empty(conn) -> bool:
+    """Return True when the database has no tables or all tables are empty.
+
+    The ``alembic_version`` table is ignored because it is populated by
+    ``alembic upgrade head`` and does not indicate seeded application data.
+    """
+
+    def _check(sync_conn) -> bool:
+        tables = inspect(sync_conn).get_table_names()
+        if not tables:
+            return True
+        for table in tables:
+            if table == "alembic_version":
+                continue
+            row = sync_conn.execute(text(f"SELECT 1 FROM {table} LIMIT 1")).first()
+            if row is not None:
+                return False
+        return True
+
+    return cast(bool, await conn.run_sync(_check))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan: create tables, seed data, cleanup resources."""
+    """Application lifespan: create tables (unless Alembic is enabled), seed
+    data only when the database is empty, and cleanup resources on shutdown.
+    """
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    await seed_data()
+        if not settings.USE_ALEMBIC:
+            await conn.run_sync(Base.metadata.create_all)
+
+        if await _database_is_empty(conn):
+            async_session = async_sessionmaker(
+                engine, class_=AsyncSession, expire_on_commit=False
+            )
+            async with async_session() as session:
+                await seed_data(session)
+
     yield
     await engine.dispose()
     await close_redis()
