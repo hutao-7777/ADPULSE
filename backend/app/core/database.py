@@ -1,4 +1,7 @@
-"""Async SQLAlchemy database configuration for PostgreSQL."""
+"""Async SQLAlchemy database configuration.
+
+Supports both SQLite (local/demo) and PostgreSQL (production) targets.
+"""
 
 from collections.abc import AsyncGenerator
 
@@ -7,14 +10,17 @@ from sqlalchemy.orm import declarative_base
 
 from app.core.config import settings
 
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.DEBUG,
-    future=True,
-    pool_size=settings.DATABASE_POOL_SIZE,
-    max_overflow=settings.DATABASE_MAX_OVERFLOW,
-    pool_recycle=settings.DATABASE_POOL_RECYCLE,
-)
+_engine_kwargs: dict = {"echo": settings.DEBUG, "future": True}
+if settings.is_postgres:
+    _engine_kwargs.update(
+        {
+            "pool_size": settings.DATABASE_POOL_SIZE,
+            "max_overflow": settings.DATABASE_MAX_OVERFLOW,
+            "pool_recycle": settings.DATABASE_POOL_RECYCLE,
+        }
+    )
+
+engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,

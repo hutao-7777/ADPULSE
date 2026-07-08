@@ -352,10 +352,10 @@ class Campaign(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    advertiser_id: Mapped[uuid.UUID] = mapped_column(
+    advertiser_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey("advertisers.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("advertisers.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
     bidding_strategy_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -390,7 +390,7 @@ class Campaign(Base):
         nullable=False,
     )
 
-    advertiser: Mapped["Advertiser"] = relationship(
+    advertiser: Mapped[Optional["Advertiser"]] = relationship(
         "Advertiser", back_populates="campaigns"
     )
     bidding_strategy: Mapped[Optional["BiddingStrategy"]] = relationship(
@@ -429,13 +429,14 @@ class Creative(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    campaign_id: Mapped[uuid.UUID] = mapped_column(
+    campaign_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey("campaigns.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("campaigns.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    image_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     asset_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     file_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     size: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -448,7 +449,9 @@ class Creative(Base):
         DateTime(timezone=False), default=datetime.utcnow, nullable=False
     )
 
-    campaign: Mapped["Campaign"] = relationship("Campaign", back_populates="creatives")
+    campaign: Mapped[Optional["Campaign"]] = relationship(
+        "Campaign", back_populates="creatives"
+    )
     bids: Mapped[List["AuctionBid"]] = relationship(
         "AuctionBid", back_populates="creative"
     )
@@ -643,8 +646,14 @@ class Experiment(Base):
     campaign: Mapped[Optional["Campaign"]] = relationship(
         "Campaign", back_populates="experiments"
     )
+    winner_variant: Mapped[Optional["Variant"]] = relationship(
+        "Variant",
+        foreign_keys="Experiment.winner_variant_id",
+    )
     variants: Mapped[List["Variant"]] = relationship(
-        "Variant", back_populates="experiment"
+        "Variant",
+        back_populates="experiment",
+        foreign_keys="Variant.experiment_id",
     )
     assignments: Mapped[List["Assignment"]] = relationship(
         "Assignment", back_populates="experiment"
@@ -681,7 +690,9 @@ class Variant(Base):
     )
 
     experiment: Mapped["Experiment"] = relationship(
-        "Experiment", back_populates="variants"
+        "Experiment",
+        back_populates="variants",
+        foreign_keys="Variant.experiment_id",
     )
     metrics: Mapped[List["ExperimentMetric"]] = relationship(
         "ExperimentMetric", back_populates="variant"
@@ -793,6 +804,11 @@ class ConversionEvent(Base):
     channel: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     device_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     geo: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    creative_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("creatives.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
     metadata_: Mapped[dict] = mapped_column(
         "metadata", JSON, default=dict, nullable=False
@@ -1146,3 +1162,167 @@ class AgentMemory(Base):
         Index("ix_agent_memories_user_type", "user_id", "memory_type"),
         Index("ix_agent_memories_created_at", "created_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Legacy / demo-compatible models
+# ---------------------------------------------------------------------------
+# The following models preserve the original SQLite-oriented schema used by
+# the existing API, services and seed data. They coexist with the new
+# PostgreSQL-oriented tables above while the codebase is incrementally
+# migrated to the production schema.
+# ---------------------------------------------------------------------------
+
+
+class Auction(Base):
+    """Legacy auction result table used by RTB dashboard and seed data."""
+
+    __tablename__ = "auctions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    campaign_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("campaigns.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    impression_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    floor_price: Mapped[float] = mapped_column(Float, nullable=False)
+    winning_bid: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    winning_dsp: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    auction_type: Mapped[str] = mapped_column(
+        String(50), default="first_price", nullable=False
+    )
+    latency_ms: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    bids: Mapped[List["BidRecord"]] = relationship(
+        "BidRecord", back_populates="auction"
+    )
+
+    __table_args__ = (
+        Index("ix_auction_campaign_id", "campaign_id"),
+        Index("ix_auction_created_at", "created_at"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<Auction(id={self.id}, campaign_id={self.campaign_id}, "
+            f"impression_id={self.impression_id!r})>"
+        )
+
+
+class BidRecord(Base):
+    """Legacy bid record table used by RTB API and seed data."""
+
+    __tablename__ = "bid_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    auction_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("auctions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    dsp_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    bid_amount: Mapped[float] = mapped_column(Float, nullable=False)
+    ctr_estimate: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    was_winner: Mapped[bool] = mapped_column(default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    auction: Mapped["Auction"] = relationship("Auction", back_populates="bids")
+
+    __table_args__ = (
+        Index("ix_bid_record_auction_id", "auction_id"),
+        Index("ix_bid_record_dsp_name", "dsp_name"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<BidRecord(id={self.id}, auction_id={self.auction_id}, "
+            f"dsp_name={self.dsp_name!r})>"
+        )
+
+
+class ABTest(Base):
+    """Legacy A/B test table used by A/B testing API and seed data."""
+
+    __tablename__ = "ab_tests"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("campaigns.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(50), default="draft", nullable=False)
+    traffic_split: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
+    metric_target: Mapped[str] = mapped_column(String(100), nullable=False)
+    start_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    end_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    winner: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), default=datetime.utcnow, nullable=False
+    )
+
+    variants: Mapped[List["ABTestVariant"]] = relationship(
+        "ABTestVariant", back_populates="ab_test"
+    )
+
+    __table_args__ = (
+        Index("ix_ab_test_campaign_id", "campaign_id"),
+        Index("ix_ab_test_status", "status"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ABTest(id={self.id}, name={self.name!r}, "
+            f"campaign_id={self.campaign_id})>"
+        )
+
+
+class ABTestVariant(Base):
+    """Legacy A/B test variant table used by A/B testing API and seed data."""
+
+    __tablename__ = "ab_test_variants"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ab_test_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("ab_tests.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    traffic_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    conversions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    impressions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    clicks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    revenue: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+
+    ab_test: Mapped["ABTest"] = relationship("ABTest", back_populates="variants")
+
+    __table_args__ = (
+        Index("ix_ab_test_variant_ab_test_id", "ab_test_id"),
+        Index("ix_ab_test_variant_name", "name"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ABTestVariant(id={self.id}, ab_test_id={self.ab_test_id}, "
+            f"name={self.name!r})>"
+        )

@@ -2,6 +2,8 @@
 
 from app.core.database import Base
 from app.models.models import (
+    ABTest,
+    ABTestVariant,
     Advertiser,
     AgentConfig,
     AgentMemory,
@@ -10,10 +12,12 @@ from app.models.models import (
     ApiKey,
     Assignment,
     AttributionResult,
+    Auction,
     AuctionBid,
     AuctionRequest,
     AuctionWin,
     BiddingStrategy,
+    BidRecord,
     Campaign,
     ConversionEvent,
     Creative,
@@ -33,6 +37,8 @@ from app.models.models import (
 
 __all__ = [
     "Base",
+    "ABTest",
+    "ABTestVariant",
     "Advertiser",
     "AgentConfig",
     "AgentMemory",
@@ -41,9 +47,11 @@ __all__ = [
     "ApiKey",
     "Assignment",
     "AttributionResult",
+    "Auction",
     "AuctionBid",
     "AuctionRequest",
     "AuctionWin",
+    "BidRecord",
     "BiddingStrategy",
     "Campaign",
     "ConversionEvent",
@@ -55,8 +63,8 @@ __all__ = [
     "Permission",
     "RefreshToken",
     "Role",
-    "TrafficQualityScore",
     "Touchpoint",
+    "TrafficQualityScore",
     "User",
     "UserPermission",
     "Variant",
