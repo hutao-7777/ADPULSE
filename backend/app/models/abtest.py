@@ -84,12 +84,20 @@ class Experiment(Base):
         "Variant",
         back_populates="experiment",
         foreign_keys="Variant.experiment_id",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     assignments: Mapped[List["Assignment"]] = relationship(
-        "Assignment", back_populates="experiment"
+        "Assignment",
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     metrics: Mapped[List["ExperimentMetric"]] = relationship(
-        "ExperimentMetric", back_populates="experiment"
+        "ExperimentMetric",
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     __table_args__ = (
