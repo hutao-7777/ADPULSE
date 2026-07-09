@@ -355,14 +355,23 @@ def compute_daily_stats(bid_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return result
 
 
+CHUNK_SIZE = 1_000
+
+
 async def bulk_insert(
     session: AsyncSession, model: Any, rows: List[Dict[str, Any]]
 ) -> int:
-    """Insert rows in bulk, ignoring conflicts."""
+    """Insert rows in bulk, ignoring conflicts, batched to stay under SQLite limits."""
     if not rows:
         return 0
-    await session.execute(sqlite_insert(model).values(rows).on_conflict_do_nothing())
-    return len(rows)
+    total = 0
+    for i in range(0, len(rows), CHUNK_SIZE):
+        chunk = rows[i : i + CHUNK_SIZE]
+        await session.execute(
+            sqlite_insert(model).values(chunk).on_conflict_do_nothing()
+        )
+        total += len(chunk)
+    return total
 
 
 async def import_raw_format(
