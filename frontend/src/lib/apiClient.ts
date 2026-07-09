@@ -8,6 +8,8 @@ const apiClient = axios.create({
   },
 });
 
+let refreshPromise: Promise<string | null> | null = null;
+
 apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = useAuthStore.getState().token;
   if (token && config.headers) {
@@ -29,11 +31,22 @@ apiClient.interceptors.response.use(
       !originalRequest._retry
     ) {
       originalRequest._retry = true;
-      const newToken = await useAuthStore.getState().refresh();
-      if (newToken && originalRequest.headers) {
-        originalRequest.headers.Authorization = `Bearer ${newToken}`;
-        return apiClient(originalRequest);
+
+      try {
+        if (!refreshPromise) {
+          refreshPromise = useAuthStore.getState().refresh();
+        }
+        const newToken = await refreshPromise;
+        refreshPromise = null;
+
+        if (newToken && originalRequest.headers) {
+          originalRequest.headers.Authorization = `Bearer ${newToken}`;
+          return apiClient(originalRequest);
+        }
+      } catch {
+        refreshPromise = null;
       }
+
       window.location.href = '/login';
     }
 
