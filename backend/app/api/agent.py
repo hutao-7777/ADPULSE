@@ -1,120 +1,76 @@
-"""Agent API endpoints for the ReAct bidding agent."""
+"""Agent API endpoints using real LLM function calling."""
 
-from typing import Any, Dict
+import uuid
+from typing import Any
+
+from fastapi import Depends, HTTPException, status
+from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.bidding_agent import BiddingAgent
+from app.core.database import get_db
 from app.core.response import APIRouter
-from app.schemas.agent import (
-    AgentMemoryEntry,
-    AgentMemoryResponse,
-    AgentRunRequest,
-    AgentRunResponse,
-    AgentStatus,
-    AgentStrategy,
-)
+from app.core.security import get_current_active_user
+from app.models import AgentConfig, User
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
-# In-memory agent registry (per campaign)
-_agents: Dict[str, BiddingAgent] = {}
+
+class AgentRunRequest(BaseModel):
+    goal: str
+    max_steps: int = 10
 
 
-def _get_or_create_agent(campaign_id: str) -> BiddingAgent:
-    if campaign_id not in _agents:
-        _agents[campaign_id] = BiddingAgent(campaign_id=campaign_id)
-    return _agents[campaign_id]
+class AgentConfigCreate(BaseModel):
+    name: str
+    goal: str
+    llm_provider: str = "openai"
+    llm_model: str = "gpt-4o-mini"
+    tools_enabled: list[str] | None = None
+    max_steps: int = 10
 
 
-@router.post("/{campaign_id}/run", response_model=AgentRunResponse)
-async def run_agent(
-    campaign_id: str,
-    request: AgentRunRequest = AgentRunRequest(),
-) -> AgentRunResponse:
-    """Run the bidding agent ReAct loop for a campaign."""
-    agent = _get_or_create_agent(campaign_id)
-
-    performance_before = await _get_campaign_metrics(campaign_id)
-    iterations = await agent.run_loop(max_iterations=request.max_iterations)
-    performance_after = await _get_campaign_metrics(campaign_id)
-
-    final_recommendation = "保持当前策略"
-    if iterations:
-        last_action = iterations[-1]["action"]
-        final_recommendation = last_action["reasoning"]
-
-    return AgentRunResponse(
-        campaign_id=campaign_id,
-        iterations=iterations,  # type: ignore[arg-type]
-        final_recommendation=final_recommendation,
-        metrics_before=performance_before,
-        metrics_after=performance_after,
+@router.post("/configs", status_code=status.HTTP_201_CREATED)
+async def create_config(
+    request: AgentConfigCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> dict[str, Any]:
+    """Create an agent configuration."""
+    config = AgentConfig(
+        user_id=current_user.id,
+        name=request.name,
+        goal=request.goal,
+        llm_provider=request.llm_provider,
+        llm_model=request.llm_model,
+        tools_enabled=request.tools_enabled or [],
+        max_steps=request.max_steps,
     )
-
-
-@router.get("/{campaign_id}/memory", response_model=AgentMemoryResponse)
-async def get_agent_memory(campaign_id: str) -> AgentMemoryResponse:
-    """Get the recent decision memory of the agent."""
-    agent = _get_or_create_agent(campaign_id)
-    memory = agent.get_memory()
-    return AgentMemoryResponse(
-        campaign_id=campaign_id,
-        memory=[
-            AgentMemoryEntry(
-                timestamp=m["timestamp"],
-                action=m["action"],
-                parameters=m["parameters"],
-                result=m["result"],
-                expected_vs_actual=m.get("expected_vs_actual", {}),
-                learned=m["learned"],
-            )
-            for m in memory
-        ],
-    )
-
-
-@router.get("/{campaign_id}/status", response_model=AgentStatus)
-async def get_agent_status(campaign_id: str) -> AgentStatus:
-    """Get the current status and strategy of the agent."""
-    agent = _get_or_create_agent(campaign_id)
-    status_data = agent.get_status()
-    return AgentStatus(
-        campaign_id=status_data["campaign_id"],
-        strategy=AgentStrategy(**status_data["strategy"]),
-        memory_size=status_data["memory_size"],
-        current_state=status_data["current_state"],
-        last_action=status_data["last_action"],
-    )
-
-
-@router.post("/{campaign_id}/strategy", response_model=AgentStatus)
-async def update_agent_strategy(
-    campaign_id: str,
-    strategy: AgentStrategy,
-) -> AgentStatus:
-    """Update the agent's strategy targets."""
-    agent = _get_or_create_agent(campaign_id)
-    agent.update_strategy(strategy.model_dump())
-    status_data = agent.get_status()
-    return AgentStatus(
-        campaign_id=status_data["campaign_id"],
-        strategy=AgentStrategy(**status_data["strategy"]),
-        memory_size=status_data["memory_size"],
-        current_state=status_data["current_state"],
-        last_action=status_data["last_action"],
-    )
-
-
-async def _get_campaign_metrics(campaign_id: str) -> Dict[str, Any]:
-    """Lightweight helper to snapshot campaign metrics before/after a run."""
-    from app.agent.tools import get_campaign_performance
-
-    perf = await get_campaign_performance(campaign_id)
+    db.add(config)
+    await db.commit()
+    await db.refresh(config)
     return {
-        "impressions": perf["impressions"],
-        "clicks": perf["clicks"],
-        "ctr": perf["ctr"],
-        "spend": perf["spend"],
-        "revenue": perf["revenue"],
-        "roi": perf["roi"],
-        "spend_ratio": perf["spend_ratio"],
+        "id": str(config.id),
+        "name": config.name,
+        "goal": config.goal,
+        "llm_provider": config.llm_provider,
+        "llm_model": config.llm_model,
     }
+
+
+@router.post("/{config_id}/run")
+async def run_agent(
+    config_id: uuid.UUID,
+    request: AgentRunRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> dict[str, Any]:
+    """Run the agent with real LLM function calling and vector memory."""
+    config = await db.get(AgentConfig, config_id)
+    if config is None or config.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Config not found"
+        )
+
+    agent = BiddingAgent(db, current_user, config)
+    return await agent.run(request.goal, max_steps=request.max_steps)

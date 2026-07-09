@@ -1,26 +1,19 @@
-"""Async SQLAlchemy database configuration.
-
-Supports both SQLite (local/demo) and PostgreSQL (production) targets.
-"""
+"""Async SQLAlchemy database configuration for SQLite."""
 
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import declarative_base
 
 from app.core.config import settings
+from app.models.base import Base
 
-_engine_kwargs: dict = {"echo": settings.DEBUG, "future": True}
-if settings.is_postgres:
-    _engine_kwargs.update(
-        {
-            "pool_size": settings.DATABASE_POOL_SIZE,
-            "max_overflow": settings.DATABASE_MAX_OVERFLOW,
-            "pool_recycle": settings.DATABASE_POOL_RECYCLE,
-        }
-    )
+__all__ = ["engine", "AsyncSessionLocal", "get_db", "Base"]
 
-engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=settings.DEBUG,
+    future=True,
+)
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
@@ -29,8 +22,6 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
     autocommit=False,
 )
-
-Base = declarative_base()
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

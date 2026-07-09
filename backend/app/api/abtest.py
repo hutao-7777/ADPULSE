@@ -1,234 +1,424 @@
-"""A/B test API endpoints."""
+"""A/B testing API endpoints."""
 
 import uuid
-from typing import List, Optional
+from datetime import datetime
+from typing import Any, List
 
-from fastapi import Depends, HTTPException, Query, status
+from fastapi import Depends, HTTPException, status
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.response import APIRouter
-from app.models.models import ABTest, ABTestVariant
-from app.schemas.abtest import (
-    ABTestCreate,
-    ABTestDetailResponse,
-    ABTestResponse,
-    ABTestResults,
-    ABTestVariantResponse,
-    AnomalyAlert,
-    EventRecordRequest,
-    UserAssignRequest,
-    UserAssignResponse,
-)
+from app.core.security import require_permission
+from app.models import Experiment, ExperimentMetric, User, Variant
+from app.models.base import utc_now
 from app.services.ab_test_engine import ABTestEngine
 
 router = APIRouter(prefix="/api/abtests", tags=["abtest"])
+engine = ABTestEngine()
 
-_engine = ABTestEngine()
+
+class AssignmentRequest(BaseModel):
+    user_id: str = Field(..., min_length=1)
 
 
-def get_engine() -> ABTestEngine:
-    return _engine
+class AssignmentResponse(BaseModel):
+    experiment_id: str
+    user_id: str
+    variant_name: str
+    in_experiment: bool
+
+
+class MetricRecordRequest(BaseModel):
+    user_id: str
+    variant_name: str
+    metric_name: str
+    metric_value: float
+
+
+class ExperimentVariantCreate(BaseModel):
+    name: str = Field(..., min_length=1)
+    config: dict = Field(default_factory=dict)
+    traffic_allocation: int = Field(..., ge=0, le=100)
+
+
+class ExperimentCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: str | None = None
+    campaign_id: uuid.UUID | None = None
+    traffic_split: int = Field(..., ge=1, le=99)
+    variants: List[ExperimentVariantCreate] = Field(..., min_length=2)
+    success_metric: str = Field(..., pattern="^(conversion_rate|ctr|revenue|roi)$")
+    min_sample_size: int | None = Field(None, ge=1)
+    max_duration_days: int | None = Field(None, ge=1)
+
+    @model_validator(mode="after")
+    def check_variants(self) -> "ExperimentCreateRequest":
+        names = [v.name for v in self.variants]
+        if len(names) != len(set(names)):
+            raise ValueError("Variant names must be unique")
+        total = sum(v.traffic_allocation for v in self.variants)
+        if total != 100:
+            raise ValueError("Variant traffic allocations must sum to 100")
+        return self
+
+
+class ExperimentVariantResponse(BaseModel):
+    id: str
+    name: str
+    config: dict
+    traffic_allocation: int
+    created_at: datetime
+
+
+class ExperimentResponse(BaseModel):
+    id: str
+    name: str
+    description: str | None
+    status: str
+    traffic_split: int
+    success_metric: str
+    min_sample_size: int | None
+    max_duration_days: int | None
+    start_date: datetime | None
+    end_date: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    variants: List[ExperimentVariantResponse]
+
+
+class ExperimentStatusUpdate(BaseModel):
+    status: str = Field(..., pattern="^(draft|running|paused|stopped)$")
+
+
+class ExperimentEventRequest(BaseModel):
+    user_id: str = Field(..., min_length=1)
+    event_type: str = Field(..., pattern="^(exposure|conversion)$")
+    variant_name: str = Field(..., min_length=1)
+    metadata: dict = Field(default_factory=dict)
+
+
+class ExperimentEventResponse(BaseModel):
+    status: str
+
+
+@router.post("", response_model=ExperimentResponse, status_code=status.HTTP_201_CREATED)
+async def create_experiment(
+    request: ExperimentCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("campaign:write")),
+) -> dict[str, Any]:
+    """Create a new A/B experiment with variants."""
+    experiment = Experiment(
+        id=uuid.uuid4(),
+        campaign_id=request.campaign_id,
+        name=request.name,
+        description=request.description,
+        status="draft",
+        metric_name=request.success_metric,
+        traffic_allocation=request.traffic_split,
+        min_sample_size=request.min_sample_size,
+        max_duration_days=request.max_duration_days,
+    )
+    db.add(experiment)
+    await db.flush()
+
+    for variant_in in request.variants:
+        variant = Variant(
+            id=uuid.uuid4(),
+            experiment_id=experiment.id,
+            name=variant_in.name,
+            traffic_pct=variant_in.traffic_allocation / 100.0,
+            config=variant_in.config,
+        )
+        db.add(variant)
+
+    await db.commit()
+
+    result = await db.execute(
+        select(Experiment)
+        .where(Experiment.id == experiment.id)
+        .options(selectinload(Experiment.variants))
+    )
+    experiment = result.scalar_one()
+    return _experiment_to_response(experiment)
+
+
+@router.patch(
+    "/{experiment_id}/status",
+    response_model=ExperimentResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_experiment_status(
+    experiment_id: uuid.UUID,
+    request: ExperimentStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("campaign:write")),
+) -> dict[str, Any]:
+    """Transition an experiment between draft/running/paused/stopped."""
+    experiment = await db.get(Experiment, experiment_id)
+    if experiment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Experiment not found"
+        )
+
+    current = experiment.status
+    new = request.status
+
+    allowed_transitions = {
+        "draft": {"running", "stopped"},
+        "running": {"paused", "stopped"},
+        "paused": {"running", "stopped"},
+        "stopped": set(),
+    }
+
+    if new not in allowed_transitions.get(current, set()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid status transition from {current} to {new}",
+        )
+
+    if new == "running" and current == "draft":
+        if experiment.min_sample_size is None or experiment.max_duration_days is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "min_sample_size and max_duration_days must be set before running"
+                ),
+            )
+        experiment.start_date = utc_now()
+
+    if new == "stopped":
+        experiment.end_date = utc_now()
+
+    experiment.status = new
+    await db.commit()
+
+    result = await db.execute(
+        select(Experiment)
+        .where(Experiment.id == experiment.id)
+        .options(selectinload(Experiment.variants))
+    )
+    experiment = result.scalar_one()
+    return _experiment_to_response(experiment)
 
 
 @router.post(
-    "", response_model=ABTestDetailResponse, status_code=status.HTTP_201_CREATED
+    "/{experiment_id}/record",
+    response_model=ExperimentEventResponse,
+    status_code=status.HTTP_201_CREATED,
 )
-async def create_ab_test(
-    request: ABTestCreate,
+async def record_experiment_event(
+    experiment_id: uuid.UUID,
+    request: ExperimentEventRequest,
     db: AsyncSession = Depends(get_db),
-    engine: ABTestEngine = Depends(get_engine),
-) -> ABTestDetailResponse:
-    """Create a new A/B test with variants."""
-    result = await engine.create_test(
-        db=db,
-        name=request.name,
-        campaign_id=request.campaign_id,
-        metric_target=request.metric_target,
-        traffic_split=request.traffic_split,
-        variants_config=[v.model_dump() for v in request.variants_config],
-    )
+    _user: User = Depends(require_permission("campaign:write")),
+) -> dict[str, str]:
+    """Record an exposure or conversion event for a user/variant."""
+    experiment = await db.get(Experiment, experiment_id)
+    if experiment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Experiment not found"
+        )
 
-    test_id = result["id"]
-    test = await db.get(ABTest, test_id)
-    if test is None:
+    variant_result = await db.execute(
+        select(Variant)
+        .where(Variant.experiment_id == experiment_id)
+        .where(Variant.name == request.variant_name)
+    )
+    variant = variant_result.scalar_one_or_none()
+    if variant is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="A/B test not found",
+            detail=f"Variant {request.variant_name} not found",
         )
 
-    variants_result = await db.execute(
-        select(ABTestVariant).where(ABTestVariant.ab_test_id == test_id)
-    )
-    variants = variants_result.scalars().all()
+    metric_name = request.event_type
 
-    base = ABTestResponse.model_validate(test)
-    return ABTestDetailResponse(
-        **base.model_dump(),
-        variants=[ABTestVariantResponse.model_validate(v) for v in variants],
-    )
-
-
-@router.get("", response_model=List[ABTestResponse])
-async def list_ab_tests(
-    status_filter: Optional[str] = Query(None, alias="status"),
-    db: AsyncSession = Depends(get_db),
-) -> List[ABTestResponse]:
-    """List A/B tests, optionally filtered by status."""
-    query = select(ABTest).order_by(ABTest.created_at.desc())
-    if status_filter:
-        query = query.where(ABTest.status == status_filter)
-    result = await db.execute(query)
-    tests = result.scalars().all()
-    return [ABTestResponse.model_validate(t) for t in tests]
-
-
-@router.get("/{test_id}", response_model=ABTestDetailResponse)
-async def get_ab_test(
-    test_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-) -> ABTestDetailResponse:
-    """Get A/B test details including variants."""
-    test = await db.get(ABTest, test_id)
-    if test is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Test not found"
+    if request.event_type == "exposure":
+        existing = await db.execute(
+            select(ExperimentMetric)
+            .where(ExperimentMetric.experiment_id == experiment_id)
+            .where(ExperimentMetric.user_id == request.user_id)
+            .where(ExperimentMetric.metric_name == metric_name)
         )
+        if existing.scalar_one_or_none() is not None:
+            return {"status": "recorded"}
 
-    variants_result = await db.execute(
-        select(ABTestVariant).where(ABTestVariant.ab_test_id == test.id)
+    metric = ExperimentMetric(
+        id=uuid.uuid4(),
+        experiment_id=experiment_id,
+        variant_id=variant.id,
+        user_id=request.user_id,
+        metric_name=metric_name,
+        metric_value=1.0,
+        event_time=utc_now(),
     )
-    variants = variants_result.scalars().all()
-
-    return ABTestDetailResponse(
-        id=test.id,
-        name=test.name,
-        campaign_id=test.campaign_id,
-        status=test.status,
-        traffic_split=test.traffic_split,
-        metric_target=test.metric_target,
-        start_date=test.start_date,
-        end_date=test.end_date,
-        winner=test.winner,
-        created_at=test.created_at,
-        variants=[ABTestVariantResponse.model_validate(v) for v in variants],
-    )
-
-
-@router.post("/{test_id}/start", response_model=ABTestResponse)
-async def start_ab_test(
-    test_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-) -> ABTestResponse:
-    """Start an A/B test."""
-    test = await db.get(ABTest, test_id)
-    if test is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Test not found"
-        )
-    if test.status == "running":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Test already running"
-        )
-
-    from datetime import datetime
-
-    test.status = "running"
-    test.start_date = datetime.utcnow()
+    db.add(metric)
     await db.commit()
-    await db.refresh(test)
-    return ABTestResponse.model_validate(test)
-
-
-@router.post("/{test_id}/stop", response_model=ABTestResponse)
-async def stop_ab_test(
-    test_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-) -> ABTestResponse:
-    """Stop an A/B test."""
-    test = await db.get(ABTest, test_id)
-    if test is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Test not found"
-        )
-    if test.status != "running":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Test is not running"
-        )
-
-    from datetime import datetime
-
-    test.status = "stopped"
-    test.end_date = datetime.utcnow()
-    await db.commit()
-    await db.refresh(test)
-    return ABTestResponse.model_validate(test)
-
-
-@router.get("/{test_id}/results", response_model=ABTestResults)
-async def get_ab_test_results(
-    test_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    engine: ABTestEngine = Depends(get_engine),
-) -> ABTestResults:
-    """Get statistical results for an A/B test."""
-    try:
-        results = await engine.get_results(db, test_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        ) from exc
-    return ABTestResults(**results)
-
-
-@router.post("/{test_id}/assign", response_model=UserAssignResponse)
-async def assign_user_to_variant(
-    test_id: uuid.UUID,
-    request: UserAssignRequest,
-    db: AsyncSession = Depends(get_db),
-    engine: ABTestEngine = Depends(get_engine),
-) -> UserAssignResponse:
-    """Assign a user to a variant."""
-    assignment = await engine.assign_user(db, test_id, request.user_id)
-    if assignment is None:
-        return UserAssignResponse(variant=None, in_experiment=False)
-    variant_name, in_experiment = assignment
-    return UserAssignResponse(variant=variant_name, in_experiment=in_experiment)
-
-
-@router.post("/{test_id}/event")
-async def record_ab_test_event(
-    test_id: uuid.UUID,
-    request: EventRecordRequest,
-    db: AsyncSession = Depends(get_db),
-    engine: ABTestEngine = Depends(get_engine),
-) -> dict:
-    """Record an event for a variant."""
-    try:
-        await engine.record_event(
-            db, test_id, request.variant, request.event_type, request.revenue
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
     return {"status": "recorded"}
 
 
-@router.get("/{test_id}/anomaly", response_model=Optional[AnomalyAlert])
-async def check_ab_test_anomaly(
-    test_id: uuid.UUID,
+@router.post("/{experiment_id}/assign", response_model=AssignmentResponse)
+async def assign_user(
+    experiment_id: uuid.UUID,
+    request: AssignmentRequest,
     db: AsyncSession = Depends(get_db),
-    engine: ABTestEngine = Depends(get_engine),
-) -> Optional[AnomalyAlert]:
-    """Check for metric anomalies in an A/B test."""
-    try:
-        alert = await engine.check_anomaly(db, test_id)
-    except ValueError as exc:
+    _user: User = Depends(require_permission("campaign:read")),
+) -> dict:
+    """Assign a user to an experiment variant using consistent hashing."""
+    result = await engine.assign_user(db, experiment_id, request.user_id)
+    if result is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        ) from exc
-    if alert is None:
-        return None
-    return AnomalyAlert(**alert)
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Experiment not found or not running",
+        )
+    variant, in_experiment = result
+    return {
+        "experiment_id": str(experiment_id),
+        "user_id": request.user_id,
+        "variant_name": variant.name,
+        "in_experiment": in_experiment,
+    }
+
+
+@router.post("/{experiment_id}/metrics", status_code=status.HTTP_201_CREATED)
+async def record_metric(
+    experiment_id: uuid.UUID,
+    request: MetricRecordRequest,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("campaign:write")),
+) -> dict:
+    """Record a metric event for a variant."""
+    await engine.record_metric(
+        db,
+        experiment_id,
+        request.variant_name,
+        request.user_id,
+        request.metric_name,
+        request.metric_value,
+    )
+    return {"status": "recorded"}
+
+
+@router.get("/{experiment_id}/analysis")
+async def analyze_experiment(
+    experiment_id: uuid.UUID,
+    metric_name: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("campaign:read")),
+) -> dict[str, Any]:
+    """Return t-test, Mann-Whitney U, power, MDE and confidence intervals."""
+    experiment = await db.get(Experiment, experiment_id)
+    if experiment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Experiment not found"
+        )
+    return await engine.analyze(db, experiment_id, metric_name)
+
+
+def _experiment_to_response(experiment: Experiment) -> dict[str, Any]:
+    return {
+        "id": str(experiment.id),
+        "name": experiment.name,
+        "campaign_id": str(experiment.campaign_id) if experiment.campaign_id else None,
+        "description": experiment.description,
+        "status": experiment.status,
+        "traffic_split": experiment.traffic_allocation,
+        "success_metric": experiment.metric_name,
+        "min_sample_size": experiment.min_sample_size,
+        "max_duration_days": experiment.max_duration_days,
+        "start_date": experiment.start_date,
+        "end_date": experiment.end_date,
+        "created_at": experiment.created_at,
+        "updated_at": experiment.updated_at,
+        "variants": [
+            {
+                "id": str(v.id),
+                "name": v.name,
+                "config": v.config,
+                "traffic_allocation": int(round(v.traffic_pct * 100)),
+                "created_at": v.created_at,
+            }
+            for v in experiment.variants
+        ],
+    }
+
+
+@router.get("", response_model=List[ExperimentResponse])
+async def list_experiments(
+    status_filter: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("campaign:read")),
+) -> List[dict[str, Any]]:
+    """List A/B experiments."""
+    query = select(Experiment).order_by(Experiment.created_at.desc())
+    if status_filter:
+        query = query.where(Experiment.status == status_filter)
+    result = await db.execute(query.options(selectinload(Experiment.variants)))
+    return [_experiment_to_response(e) for e in result.scalars().all()]
+
+
+@router.get("/{experiment_id}", response_model=ExperimentResponse)
+async def get_experiment(
+    experiment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("campaign:read")),
+) -> dict[str, Any]:
+    """Get a single A/B experiment."""
+    experiment = await db.get(Experiment, experiment_id)
+    if experiment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Experiment not found"
+        )
+    await db.refresh(experiment, attribute_names=["variants"])
+    return _experiment_to_response(experiment)
+
+
+@router.post("/{experiment_id}/start", response_model=ExperimentResponse)
+async def start_experiment(
+    experiment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("campaign:write")),
+) -> dict[str, Any]:
+    """Start an experiment (convenience shortcut)."""
+    return await update_experiment_status(
+        experiment_id,
+        ExperimentStatusUpdate(status="running"),
+        db,
+        _user,
+    )
+
+
+@router.post("/{experiment_id}/stop", response_model=ExperimentResponse)
+async def stop_experiment(
+    experiment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("campaign:write")),
+) -> dict[str, Any]:
+    """Stop an experiment (convenience shortcut)."""
+    return await update_experiment_status(
+        experiment_id,
+        ExperimentStatusUpdate(status="stopped"),
+        db,
+        _user,
+    )
+
+
+@router.delete("/{experiment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_experiment(
+    experiment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("campaign:write")),
+) -> None:
+    """Delete an experiment and its variants/metrics."""
+    experiment = await db.get(Experiment, experiment_id)
+    if experiment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Experiment not found"
+        )
+    await db.delete(experiment)
+    await db.commit()

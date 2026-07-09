@@ -1,52 +1,18 @@
 version: "3.8"
 
 services:
-  postgres:
-    image: postgres:15-alpine
-    container_name: adpulse-postgres
-    environment:
-      POSTGRES_USER: adpulse
-      POSTGRES_PASSWORD: adpulse
-      POSTGRES_DB: adpulse
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U adpulse -d adpulse"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  redis:
-    image: redis:7-alpine
-    container_name: adpulse-redis
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: adpulse-backend
     environment:
-      DATABASE_URL: postgresql+asyncpg://adpulse:adpulse@postgres:5432/adpulse
-      REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me}
-      CORS_ORIGINS: http://localhost,http://localhost:5173
-      USE_ALEMBIC: "true"
+      DATABASE_URL: sqlite+aiosqlite:///./adpulse.db
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
+      CORS_ORIGINS: http://localhost
+      ENABLE_PUBLIC_REGISTRATION: "false"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     ports:
       - "8000:8000"
     restart: unless-stopped
@@ -56,13 +22,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: /api/v2
+        VITE_API_URL: /api
     container_name: adpulse-frontend
     ports:
       - "80:80"
     depends_on:
       - backend
     restart: unless-stopped
-
-volumes:
-  pgdata:

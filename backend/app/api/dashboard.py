@@ -9,10 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import APIRouter
-from app.models.models import Auction
+from app.models import AuctionRequest, AuctionWin
 from app.schemas.dashboard import RTBSummary, TrendPoint, WinRateTrend
 
-router = APIRouter(prefix="/api/v2/dashboard", tags=["dashboard"])
+router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
 @router.get("/summary")
@@ -35,26 +35,28 @@ async def get_rtb_summary(db: AsyncSession = Depends(get_db)) -> RTBSummary:
     )
 
     total_result = await db.execute(
-        select(func.count(Auction.id)).where(Auction.created_at >= today_start)
+        select(func.count(AuctionRequest.id)).where(
+            AuctionRequest.created_at >= today_start
+        )
     )
     total_auctions = total_result.scalar() or 0
 
     wins_result = await db.execute(
-        select(func.count(Auction.id))
-        .where(Auction.created_at >= today_start)
-        .where(Auction.winning_dsp.isnot(None))
+        select(func.count(AuctionWin.id)).where(AuctionWin.created_at >= today_start)
     )
     total_wins = wins_result.scalar() or 0
 
     avg_result = await db.execute(
-        select(func.avg(Auction.winning_bid))
-        .where(Auction.created_at >= today_start)
-        .where(Auction.winning_bid.isnot(None))
+        select(func.avg(AuctionWin.winning_bid)).where(
+            AuctionWin.created_at >= today_start
+        )
     )
     avg_winning_bid = avg_result.scalar() or 0.0
 
     latency_result = await db.execute(
-        select(func.avg(Auction.latency_ms)).where(Auction.created_at >= today_start)
+        select(func.avg(AuctionRequest.latency_ms)).where(
+            AuctionRequest.created_at >= today_start
+        )
     )
     avg_latency = latency_result.scalar() or 0.0
 
@@ -78,29 +80,29 @@ async def get_win_rate_trend(
     now = datetime.now(timezone.utc)
     if period == "24h":
         start = now - timedelta(hours=24)
-        group_expr = func.strftime("%Y-%m-%d %H:00", Auction.created_at)
+        group_expr = func.strftime("%Y-%m-%d %H:00", AuctionRequest.created_at)
         labels = [
             (start + timedelta(hours=i)).strftime("%Y-%m-%d %H:00") for i in range(25)
         ]
     else:
         start = now - timedelta(days=7)
-        group_expr = func.strftime("%Y-%m-%d", Auction.created_at)
+        group_expr = func.strftime("%Y-%m-%d", AuctionRequest.created_at)
         labels = [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(8)]
 
     auctions_subq = (
-        select(group_expr.label("bucket"), func.count(Auction.id).label("cnt"))
-        .where(Auction.created_at >= start)
+        select(group_expr.label("bucket"), func.count(AuctionRequest.id).label("cnt"))
+        .where(AuctionRequest.created_at >= start)
         .group_by(group_expr)
         .subquery()
     )
     wins_subq = (
         select(
             group_expr.label("bucket"),
-            func.count(Auction.id).label("cnt"),
-            func.avg(Auction.winning_bid).label("avg_bid"),
+            func.count(AuctionWin.id).label("cnt"),
+            func.avg(AuctionWin.winning_bid).label("avg_bid"),
         )
-        .where(Auction.created_at >= start)
-        .where(Auction.winning_dsp.isnot(None))
+        .select_from(AuctionWin)
+        .where(AuctionWin.created_at >= start)
         .group_by(group_expr)
         .subquery()
     )

@@ -12,6 +12,9 @@ jobs:
     defaults:
       run:
         working-directory: ./backend
+    env:
+      SECRET_KEY: ${{ secrets.SECRET_KEY || 'ci-test-secret-key-must-be-at-least-32-characters-long' }}
+      ENABLE_PUBLIC_REGISTRATION: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -23,6 +26,15 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Check formatting with black
+        run: black --check app tests
+
+      - name: Lint with flake8
+        run: flake8 app tests --count
+
+      - name: Type check with mypy
+        run: mypy app tests
 
       - name: Run pytest
         run: |
@@ -46,6 +58,9 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
+      - name: Lint
+        run: npm run lint
 
       - name: Build
         run: npm run build

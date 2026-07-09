@@ -8,38 +8,34 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api import (
-    abtest_simulation,
-    abtest_v2,
-    agent_simulation,
-    agent_v2,
-    attribution_v2,
-    auth,
-    dashboard,
-    rtb_v2,
-    traffic,
-)
+from app.api import abtest, agent, attribution, auth, dashboard, rtb, traffic
 from app.core.config import settings
 from app.core.database import Base, engine
-from app.core.redis import close_redis
 from app.core.response import register_exception_handlers
 from app.core.seed import seed_data
 
 
-async def _database_is_empty(conn) -> bool:
-    """Return True when the database has no tables or all tables are empty.
+def _ensure_security_settings() -> None:
+    """Validate security-critical settings at startup."""
+    if not settings.SECRET_KEY or settings.SECRET_KEY in {
+        "change-me-in-production",
+        "dev-secret-change-me",
+        "",
+    }:
+        raise RuntimeError(
+            "SECRET_KEY is not configured. "
+            "Set a strong SECRET_KEY environment variable."
+        )
 
-    The ``alembic_version`` table is ignored because it is populated by
-    ``alembic upgrade head`` and does not indicate seeded application data.
-    """
+
+async def _database_is_empty(conn) -> bool:
+    """Return True when the database has no tables or all tables are empty."""
 
     def _check(sync_conn) -> bool:
         tables = inspect(sync_conn).get_table_names()
         if not tables:
             return True
         for table in tables:
-            if table == "alembic_version":
-                continue
             row = sync_conn.execute(text(f"SELECT 1 FROM {table} LIMIT 1")).first()
             if row is not None:
                 return False
@@ -50,12 +46,11 @@ async def _database_is_empty(conn) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan: create tables (unless Alembic is enabled), seed
-    data only when the database is empty, and cleanup resources on shutdown.
-    """
+    """Application lifespan: create tables, seed data when empty, cleanup."""
+    _ensure_security_settings()
+
     async with engine.begin() as conn:
-        if not settings.USE_ALEMBIC:
-            await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(Base.metadata.create_all)
 
         if await _database_is_empty(conn):
             async_session = async_sessionmaker(
@@ -66,7 +61,6 @@ async def lifespan(app: FastAPI):
 
     yield
     await engine.dispose()
-    await close_redis()
 
 
 app = FastAPI(
@@ -87,17 +81,15 @@ app.add_middleware(
 register_exception_handlers(app)
 
 app.include_router(auth.router)
-app.include_router(attribution_v2.router)
+app.include_router(attribution.router)
 app.include_router(traffic.router)
-app.include_router(rtb_v2.router)
-app.include_router(abtest_v2.router)
-app.include_router(abtest_simulation.router)
+app.include_router(rtb.router)
+app.include_router(abtest.router)
 app.include_router(dashboard.router)
-app.include_router(agent_simulation.router)
-app.include_router(agent_v2.router)
+app.include_router(agent.router)
 
 
 @app.get("/health")
-async def health_check():
+async def health_check() -> dict:
     """Health check endpoint."""
     return {"status": "ok"}

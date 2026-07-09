@@ -3,13 +3,13 @@
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
-from app.models.models import Auction, BidRecord, Campaign, Creative, DailyMetric
+from app.models import Campaign, Creative, DailyMetric
 
 
 async def _get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -74,65 +74,10 @@ async def get_campaign_performance(campaign_id: str) -> Dict[str, Any]:
         }
 
 
-async def get_auction_history(
-    campaign_id: str, hours: int = 24
-) -> List[Dict[str, Any]]:
-    """Return recent auction records for a campaign."""
-    async with AsyncSessionLocal() as session:
-        campaign_uuid = _as_uuid(campaign_id)
-        if not campaign_uuid:
-            return []
-
-        since = datetime.now(timezone.utc) - timedelta(hours=hours)
-        result = await session.execute(
-            select(Auction)
-            .where(Auction.campaign_id == campaign_uuid)
-            .where(Auction.created_at >= since)
-            .order_by(Auction.created_at.desc())
-        )
-        auctions = result.scalars().all()
-
-        records = []
-        for auction in auctions:
-            bids_result = await session.execute(
-                select(BidRecord).where(BidRecord.auction_id == auction.id)
-            )
-            bids = bids_result.scalars().all()
-
-            competitor_bids = [
-                b.bid_amount * 1000.0 for b in bids if b.dsp_name != auction.winning_dsp
-            ]
-            records.append(
-                {
-                    "auction_id": auction.impression_id,
-                    "auction_type": auction.auction_type,
-                    "floor_price_cpm": round(auction.floor_price * 1000.0, 4),
-                    "winning_bid_cpm": (
-                        round(auction.winning_bid * 1000.0, 4)
-                        if auction.winning_bid
-                        else None
-                    ),
-                    "winning_dsp": auction.winning_dsp,
-                    "total_bids": len(bids),
-                    "avg_competitor_bid_cpm": (
-                        round(sum(competitor_bids) / len(competitor_bids), 4)
-                        if competitor_bids
-                        else None
-                    ),
-                    "latency_ms": auction.latency_ms,
-                    "created_at": (
-                        auction.created_at.isoformat() if auction.created_at else None
-                    ),
-                }
-            )
-        return records
-
-
 async def get_market_benchmark(
     geo: str, ad_format: str, category: str
 ) -> Dict[str, Any]:
     """Return mock market benchmark data for a segment."""
-    # Deterministic pseudo-random based on input so the same segment is stable
     seed = hash((geo.lower(), ad_format.lower(), category.lower())) % 10000
     rng = random.Random(seed)
 
@@ -162,40 +107,21 @@ async def get_market_benchmark(
 
 async def adjust_bid(campaign_id: str, bid_adjustment_pct: float) -> Dict[str, Any]:
     """Simulate a bid adjustment and estimate its impact."""
-    async with AsyncSessionLocal() as session:
-        campaign_uuid = _as_uuid(campaign_id)
-        campaign = None
-        if campaign_uuid:
-            campaign = await session.get(Campaign, campaign_uuid)
+    current_cpm = 8.0
+    new_cpm = current_cpm * (1 + bid_adjustment_pct)
 
-        current_cpm = 8.0
-        if campaign and campaign.spent > 0 and campaign.budget > 0:
-            # Use a heuristic current CPM derived from average auction if available
-            auction_result = await session.execute(
-                select(func.avg(Auction.winning_bid))
-                .where(Auction.campaign_id == campaign_uuid)
-                .where(Auction.winning_bid.isnot(None))
-            )
-            avg_bid = auction_result.scalar()
-            if avg_bid:
-                current_cpm = avg_bid * 1000.0
+    impressions_change_pct = round(bid_adjustment_pct * 1.5 * 100.0, 2)
+    ctr_change_pct = round(bid_adjustment_pct * -0.1 * 100.0, 2)
 
-        new_cpm = current_cpm * (1 + bid_adjustment_pct)
-
-        # Simple elasticity model
-        impressions_change_pct = round(bid_adjustment_pct * 1.5 * 100.0, 2)
-        # CTR changes slightly with bid because higher bids may win worse placements
-        ctr_change_pct = round(bid_adjustment_pct * -0.1 * 100.0, 2)
-
-        return {
-            "campaign_id": campaign_id,
-            "current_cpm": round(current_cpm, 4),
-            "bid_adjustment_pct": round(bid_adjustment_pct, 4),
-            "new_cpm": round(new_cpm, 4),
-            "expected_impressions_change_pct": impressions_change_pct,
-            "expected_ctr_change_pct": ctr_change_pct,
-            "simulated": True,
-        }
+    return {
+        "campaign_id": campaign_id,
+        "current_cpm": round(current_cpm, 4),
+        "bid_adjustment_pct": round(bid_adjustment_pct, 4),
+        "new_cpm": round(new_cpm, 4),
+        "expected_impressions_change_pct": impressions_change_pct,
+        "expected_ctr_change_pct": ctr_change_pct,
+        "simulated": True,
+    }
 
 
 async def get_creative_performance(creative_id: str) -> Dict[str, Any]:
@@ -217,8 +143,6 @@ async def get_creative_performance(creative_id: str) -> Dict[str, Any]:
                 "ctr": 0.0,
             }
 
-        # Creative is not directly tied to DailyMetric in current schema,
-        # so we return stored scores plus deterministic mock usage stats.
         seed = hash(str(creative.id)) % 10000
         rng = random.Random(seed)
         impressions = int(rng.randint(1000, 50000))

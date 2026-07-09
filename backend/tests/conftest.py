@@ -1,29 +1,46 @@
 """Shared pytest fixtures for AdPulse API tests."""
 
+import os
 from contextlib import asynccontextmanager
 
-import httpx
-import pytest_asyncio
-from fastapi import FastAPI
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+import httpx  # noqa: E402
+import pytest_asyncio  # noqa: E402
+from fastapi import FastAPI  # noqa: E402
+from sqlalchemy.ext.asyncio import (  # noqa: E402
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
-from app.api import (
-    abtest_v2,
-    agent_v2,
-    attribution_v2,
+# Ensure required settings are present before the app configuration is imported.
+os.environ.setdefault(
+    "SECRET_KEY", "test-secret-key-must-be-at-least-32-characters-long"
+)
+os.environ.setdefault("ENABLE_PUBLIC_REGISTRATION", "true")
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+
+from app.api import (  # noqa: E402
+    abtest,
+    agent,
+    attribution,
     auth,
     dashboard,
-    rtb_v2,
+    rtb,
     traffic,
 )
-from app.core.database import Base, get_db
-from app.core.response import register_exception_handlers
-from app.core.seed import seed_data
+from app.core.config import settings  # noqa: E402
+from app.core.database import Base, get_db  # noqa: E402
+from app.core.response import register_exception_handlers  # noqa: E402
+from app.core.seed import seed_data  # noqa: E402
 
 
 @pytest_asyncio.fixture
 async def client():
     """Create a test client backed by an in-memory SQLite database."""
+    settings.SECRET_KEY = "test-secret-key-must-be-at-least-32-characters-long"
+    settings.ENABLE_PUBLIC_REGISTRATION = True
+    settings.DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+
     test_engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         future=True,
@@ -57,12 +74,12 @@ async def client():
     test_app = FastAPI(lifespan=lifespan)
     register_exception_handlers(test_app)
     test_app.include_router(auth.router)
-    test_app.include_router(attribution_v2.router)
+    test_app.include_router(attribution.router)
     test_app.include_router(traffic.router)
-    test_app.include_router(rtb_v2.router)
-    test_app.include_router(abtest_v2.router)
+    test_app.include_router(rtb.router)
+    test_app.include_router(abtest.router)
     test_app.include_router(dashboard.router)
-    test_app.include_router(agent_v2.router)
+    test_app.include_router(agent.router)
     test_app.dependency_overrides[get_db] = override_get_db
 
     # Agent tools open their own sessions via AsyncSessionLocal; redirect them

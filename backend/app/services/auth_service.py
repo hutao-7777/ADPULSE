@@ -17,7 +17,7 @@ from app.core.security import (
     get_password_hash,
     verify_password,
 )
-from app.models.models import ApiKey, RefreshToken, Role, User
+from app.models import ApiKey, RefreshToken, Role, User
 
 
 class AuthService:

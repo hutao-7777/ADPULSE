@@ -1,424 +1,365 @@
-"""A/B testing engine with statistical inference."""
+"""Production A/B testing engine.
 
-import asyncio
+Features:
+- Consistent hash assignment: hash(user_id + experiment_id) % 100.
+- Two-sample t-test and Mann-Whitney U test.
+- Power analysis, MDE, confidence intervals, p-values.
+- Sample size estimation.
+"""
+
 import hashlib
 import math
 import uuid
-from collections import defaultdict
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple, cast
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy import stats
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import ABTest, ABTestVariant
+from app.models import Assignment, Experiment, ExperimentMetric, Variant
+
+
+@dataclass
+class VariantStats:
+    """Statistical summary for a variant."""
+
+    variant_id: str
+    name: str
+    traffic_pct: float
+    n: int
+    mean: float
+    std: float
+    sum_value: float
+
+
+@dataclass
+class VariantComparison:
+    """Comparison of a treatment variant against control."""
+
+    variant_name: str
+    control_name: str
+    n_treatment: int
+    n_control: int
+    mean_treatment: float
+    mean_control: float
+    diff: float
+    relative_lift_pct: float
+    p_value_ttest: float
+    p_value_mannwhitney: float
+    confidence_interval_95: Tuple[float, float]
+    power: float
+    mde_absolute: float
+    recommended_sample_size: int
+    is_significant: bool
 
 
 class ABTestEngine:
-    """A/B test lifecycle, assignment, event recording and inference engine."""
+    """Production A/B test engine with rigorous statistical inference."""
 
-    _BUCKET_SIZE = 10_000
-
-    def __init__(self) -> None:
-        # Per-test lock to serialize event recording
-        self._locks: Dict[uuid.UUID, asyncio.Lock] = defaultdict(asyncio.Lock)
-        self._history: Dict[
-            uuid.UUID, Dict[str, List[Tuple[datetime, float, float]]]
-        ] = defaultdict(lambda: defaultdict(list))
-
-    def _user_bucket(self, test_id: uuid.UUID, user_id: str, salt: str = "") -> int:
-        key = f"{str(test_id)}:{user_id}:{salt}".encode("utf-8")
+    def _hash_bucket(self, user_id: str, experiment_id: uuid.UUID) -> int:
+        """Consistent hash bucket in [0, 99]."""
+        key = f"{user_id}:{experiment_id}".encode("utf-8")
         digest = hashlib.md5(key).hexdigest()
-        return int(digest, 16) % self._BUCKET_SIZE
-
-    async def create_test(
-        self,
-        db: AsyncSession,
-        name: str,
-        campaign_id: uuid.UUID,
-        metric_target: str,
-        traffic_split: float,
-        variants_config: List[Dict],
-    ) -> Dict:
-        """Create an A/B test with its variants."""
-        total_pct = sum(v["traffic_pct"] for v in variants_config)
-        if not (0.99 <= total_pct <= 1.01):
-            raise ValueError("Variant traffic percentages must sum to 1.0")
-
-        test = ABTest(
-            id=uuid.uuid4(),
-            name=name,
-            campaign_id=campaign_id,
-            status="draft",
-            traffic_split=traffic_split,
-            metric_target=metric_target,
-        )
-        db.add(test)
-        await db.flush()
-
-        variants = []
-        for cfg in variants_config:
-            variant = ABTestVariant(
-                id=uuid.uuid4(),
-                ab_test_id=test.id,
-                name=cfg["name"],
-                traffic_pct=cfg["traffic_pct"],
-            )
-            db.add(variant)
-            variants.append(variant)
-
-        await db.commit()
-        await db.refresh(test)
-
-        return {
-            "id": test.id,
-            "name": test.name,
-            "campaign_id": test.campaign_id,
-            "status": test.status,
-            "traffic_split": test.traffic_split,
-            "metric_target": test.metric_target,
-            "variants": [
-                {
-                    "id": v.id,
-                    "name": v.name,
-                    "traffic_pct": v.traffic_pct,
-                }
-                for v in variants
-            ],
-        }
-
-    async def _get_test_and_variants(
-        self, db: AsyncSession, test_id: uuid.UUID
-    ) -> Tuple[Optional[ABTest], List[ABTestVariant]]:
-        result = await db.execute(select(ABTest).where(ABTest.id == test_id))
-        test = result.scalar_one_or_none()
-        if test is None:
-            return None, []
-        variants_result = await db.execute(
-            select(ABTestVariant).where(ABTestVariant.ab_test_id == test_id)
-        )
-        variants = list(variants_result.scalars().all())
-        return test, variants
+        return int(digest, 16) % 100
 
     async def assign_user(
-        self, db: AsyncSession, test_id: uuid.UUID, user_id: str
-    ) -> Optional[Tuple[str, bool]]:
+        self,
+        db: AsyncSession,
+        experiment_id: uuid.UUID,
+        user_id: str,
+    ) -> Optional[Tuple[Variant, bool]]:
         """Assign a user to a variant.
 
-        Returns (variant_name, in_experiment). Returns None if the test is not running.
+        Returns (variant, in_experiment). Returns None if experiment is not running.
         """
-        test, variants = await self._get_test_and_variants(db, test_id)
-        if test is None or test.status != "running":
+        experiment = await db.get(Experiment, experiment_id)
+        if experiment is None or experiment.status != "running":
             return None
+
+        variants_result = await db.execute(
+            select(Variant).where(Variant.experiment_id == experiment_id)
+        )
+        variants = list(variants_result.scalars().all())
         if not variants:
             return None
 
-        control_variant = next(
-            (v for v in variants if v.name.lower() == "control"), variants[0]
+        # Check existing assignment.
+        existing = await db.execute(
+            select(Assignment)
+            .where(Assignment.experiment_id == experiment_id)
+            .where(Assignment.user_id == user_id)
         )
+        assignment = existing.scalar_one_or_none()
+        if assignment:
+            variant = next(
+                (v for v in variants if v.id == assignment.variant_id), variants[0]
+            )
+            return variant, True
 
-        bucket = self._user_bucket(test_id, user_id)
-        experiment_threshold = int(test.traffic_split * self._BUCKET_SIZE)
+        bucket = self._hash_bucket(user_id, experiment_id)
+        if bucket >= experiment.traffic_allocation:
+            # User is outside the experiment; return control experience.
+            control = next(
+                (v for v in variants if v.name.lower() == "control"), variants[0]
+            )
+            return control, False
 
-        if bucket >= experiment_threshold:
-            return control_variant.name, False
-
-        # Normalize assignment within experiment traffic
-        normalized = bucket / experiment_threshold if experiment_threshold > 0 else 0.0
+        # Map bucket to variant based on traffic_pct.
+        normalized = bucket / experiment.traffic_allocation
         cumulative = 0.0
+        selected = variants[-1]
         for variant in variants:
             cumulative += variant.traffic_pct
             if normalized < cumulative:
-                return variant.name, True
-        return variants[-1].name, True
+                selected = variant
+                break
 
-    async def record_event(
+        # Persist assignment.
+        assignment = Assignment(
+            experiment_id=experiment_id,
+            variant_id=selected.id,
+            user_id=user_id,
+            bucket=bucket,
+        )
+        db.add(assignment)
+        await db.commit()
+
+        return selected, True
+
+    async def record_metric(
         self,
         db: AsyncSession,
-        test_id: uuid.UUID,
+        experiment_id: uuid.UUID,
         variant_name: str,
-        event_type: str,
-        revenue: Optional[float] = None,
+        user_id: str,
+        metric_name: str,
+        metric_value: float,
     ) -> None:
-        """Record an event for a variant under a per-test lock."""
-        test, variants = await self._get_test_and_variants(db, test_id)
-        if test is None:
-            raise ValueError("Test not found")
-        if test.status != "running":
-            raise ValueError("Test is not running")
+        """Record a metric event for a user/variant."""
+        experiment = await db.get(Experiment, experiment_id)
+        if experiment is None or experiment.status != "running":
+            raise ValueError("Experiment not found or not running")
 
-        variant = next((v for v in variants if v.name == variant_name), None)
+        variant_result = await db.execute(
+            select(Variant)
+            .where(Variant.experiment_id == experiment_id)
+            .where(Variant.name == variant_name)
+        )
+        variant = variant_result.scalar_one_or_none()
         if variant is None:
             raise ValueError(f"Variant {variant_name} not found")
 
-        async with self._locks[test_id]:
-            column_map = {
-                "impression": ABTestVariant.impressions,
-                "click": ABTestVariant.clicks,
-                "conversion": ABTestVariant.conversions,
-            }
+        metric = ExperimentMetric(
+            experiment_id=experiment_id,
+            variant_id=variant.id,
+            user_id=user_id,
+            metric_name=metric_name,
+            metric_value=metric_value,
+            event_time=datetime.now(timezone.utc),
+        )
+        db.add(metric)
+        await db.commit()
 
-            if event_type in column_map:
-                column = column_map[event_type]
-                await db.execute(
-                    update(ABTestVariant)
-                    .where(ABTestVariant.id == variant.id)
-                    .values({column: column + 1})
-                )
-            elif event_type == "revenue":
-                if revenue is None:
-                    raise ValueError("Revenue value is required for revenue events")
-                await db.execute(
-                    update(ABTestVariant)
-                    .where(ABTestVariant.id == variant.id)
-                    .values({ABTestVariant.revenue: ABTestVariant.revenue + revenue})
-                )
-            else:
-                raise ValueError(f"Unsupported event type: {event_type}")
+    async def _fetch_variant_samples(
+        self,
+        db: AsyncSession,
+        experiment_id: uuid.UUID,
+        metric_name: str,
+    ) -> Dict[str, np.ndarray]:
+        """Return metric samples grouped by variant name."""
+        result = await db.execute(
+            select(ExperimentMetric)
+            .where(ExperimentMetric.experiment_id == experiment_id)
+            .where(ExperimentMetric.metric_name == metric_name)
+        )
+        metrics = result.scalars().all()
 
-            await db.commit()
-            await db.refresh(variant)
+        samples: Dict[str, List[float]] = {}
+        for m in metrics:
+            variant = await db.get(Variant, m.variant_id)
+            if variant is None:
+                continue
+            samples.setdefault(variant.name, []).append(m.metric_value)
 
-            # Refresh anomaly history
-            await self._update_history(db, test, variant)
+        return {name: np.array(values, dtype=float) for name, values in samples.items()}
 
-    async def _update_history(
-        self, db: AsyncSession, test: ABTest, variant: ABTestVariant
-    ) -> None:
-        """Append current metric snapshot for anomaly detection."""
-        ctr = variant.clicks / variant.impressions if variant.impressions > 0 else 0.0
-        cr = variant.conversions / variant.clicks if variant.clicks > 0 else 0.0
-        self._history[test.id][variant.name].append((datetime.utcnow(), ctr, cr))
+    def _variant_stats(self, samples: np.ndarray) -> VariantStats:
+        """Compute descriptive statistics for a sample array."""
+        return VariantStats(
+            variant_id="",
+            name="",
+            traffic_pct=0.0,
+            n=len(samples),
+            mean=float(np.mean(samples)) if len(samples) else 0.0,
+            std=float(np.std(samples, ddof=1)) if len(samples) > 1 else 0.0,
+            sum_value=float(np.sum(samples)) if len(samples) else 0.0,
+        )
 
-    def _build_samples(self, variant: ABTestVariant, metric: str) -> np.ndarray:
-        """Build a single sample array for a variant based on the metric."""
-        if metric == "ctr":
-            n = variant.impressions
-            successes = variant.clicks
-        elif metric == "conversion_rate":
-            n = variant.clicks
-            successes = variant.conversions
-        elif metric == "roi":
-            n = variant.impressions
-            successes = variant.conversions
-        else:
-            raise ValueError(f"Unsupported metric: {metric}")
+    def _ttest(self, control: np.ndarray, treatment: np.ndarray) -> float:
+        """Two-sample t-test p-value (unequal variance)."""
+        if len(control) < 2 or len(treatment) < 2:
+            return 1.0
+        _, p_value = stats.ttest_ind(control, treatment, equal_var=False)
+        return float(p_value) if not math.isnan(p_value) else 1.0
 
-        arr = np.zeros(n, dtype=np.float64)
-        if successes > 0:
-            if metric == "roi" and variant.revenue > 0:
-                value = variant.revenue / successes
-                arr[:successes] = value
-            else:
-                arr[:successes] = 1.0
-        return arr
+    def _mann_whitney(self, control: np.ndarray, treatment: np.ndarray) -> float:
+        """Mann-Whitney U test p-value (non-parametric)."""
+        if len(control) < 2 or len(treatment) < 2:
+            return 1.0
+        try:
+            _, p_value = stats.mannwhitneyu(control, treatment, alternative="two-sided")
+            return float(p_value)
+        except ValueError:
+            return 1.0
 
-    def _proportion_stats(self, n: int, successes: int) -> Tuple[float, float]:
-        p = successes / n if n > 0 else 0.0
-        var = p * (1 - p) / n if n > 0 else 0.0
-        return p, var
+    def _confidence_interval(
+        self, control: np.ndarray, treatment: np.ndarray, confidence: float = 0.95
+    ) -> Tuple[float, float]:
+        """Confidence interval for the difference in means."""
+        n1, n2 = len(control), len(treatment)
+        if n1 < 2 or n2 < 2:
+            return (0.0, 0.0)
+        mean1, mean2 = float(np.mean(control)), float(np.mean(treatment))
+        var1 = float(np.var(control, ddof=1)) if n1 > 1 else 0.0
+        var2 = float(np.var(treatment, ddof=1)) if n2 > 1 else 0.0
+        se = math.sqrt(var1 / n1 + var2 / n2)
+        alpha = 1 - confidence
+        z = stats.norm.ppf(1 - alpha / 2)
+        diff = mean2 - mean1
+        margin = z * se
+        return (diff - margin, diff + margin)
 
-    def _power_for_proportions(
-        self, n1: int, p1: float, n2: int, p2: float, alpha: float = 0.05
+    def _power(
+        self,
+        control: np.ndarray,
+        treatment: np.ndarray,
+        alpha: float = 0.05,
     ) -> float:
-        """Approximate power for a two-sided two-proportion z-test."""
-        if n1 == 0 or n2 == 0:
+        """Approximate power of a two-sample z-test for the observed effect."""
+        n1, n2 = len(control), len(treatment)
+        if n1 < 2 or n2 < 2:
             return 0.0
-        delta = abs(p1 - p2)
+        p1 = float(np.mean(control))
+        p2 = float(np.mean(treatment))
+        delta = abs(p2 - p1)
         if delta == 0:
             return 0.0
-        se = math.sqrt(p1 * (1 - p1) / n1 + p2 * (1 - p2) / n2)
+        se = math.sqrt(p1 * (1 - p1) / max(n1, 1) + p2 * (1 - p2) / max(n2, 1))
         if se == 0:
             return 1.0
         z = delta / se
         z_alpha = stats.norm.ppf(1 - alpha / 2)
-        beta = stats.norm.cdf(z_alpha - z)
-        return float(1 - beta)
+        return float(1 - stats.norm.cdf(z_alpha - z))
 
-    async def get_results(self, db: AsyncSession, test_id: uuid.UUID) -> Dict:
-        """Compute full statistical results for every variant versus control."""
-        test, variants = await self._get_test_and_variants(db, test_id)
-        if test is None:
-            raise ValueError("Test not found")
+    def _mde_absolute(
+        self,
+        control: np.ndarray,
+        treatment: np.ndarray,
+        alpha: float = 0.05,
+        beta: float = 0.2,
+    ) -> float:
+        """Minimum Detectable Effect (absolute) given current variance."""
+        n1, n2 = len(control), len(treatment)
+        if n1 < 2 or n2 < 2:
+            return 0.0
+        var1 = float(np.var(control, ddof=1)) if n1 > 1 else 0.0
+        var2 = float(np.var(treatment, ddof=1)) if n2 > 1 else 0.0
+        pooled_se = math.sqrt(var1 / n1 + var2 / n2)
+        z_alpha = float(stats.norm.ppf(1 - alpha / 2))
+        z_beta = float(stats.norm.ppf(1 - beta))
+        return (z_alpha + z_beta) * pooled_se
 
-        control = next((v for v in variants if v.name.lower() == "control"), None)
-        if control is None:
+    def _sample_size_per_variant(
+        self,
+        baseline_mean: float,
+        baseline_std: float,
+        mde: float,
+        alpha: float = 0.05,
+        power: float = 0.8,
+    ) -> int:
+        """Required sample size per variant for a two-sided t-test."""
+        if baseline_std <= 0 or mde <= 0:
+            return 0
+        z_alpha = float(stats.norm.ppf(1 - alpha / 2))
+        z_beta = float(stats.norm.ppf(power))
+        n = 2 * ((baseline_std * (z_alpha + z_beta) / mde) ** 2)
+        return int(math.ceil(n))
+
+    async def analyze(
+        self,
+        db: AsyncSession,
+        experiment_id: uuid.UUID,
+        metric_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Run full statistical analysis for an experiment."""
+        experiment = await db.get(Experiment, experiment_id)
+        if experiment is None:
+            raise ValueError("Experiment not found")
+
+        metric = metric_name or experiment.metric_name
+        samples = await self._fetch_variant_samples(db, experiment_id, metric)
+
+        control_name: Optional[str] = "control"
+        if control_name not in samples:
+            # Fallback: first variant alphabetical.
+            control_name = sorted(samples.keys())[0] if samples else None
+
+        if control_name is None or control_name not in samples:
             raise ValueError("No control variant found")
 
-        control_samples = self._build_samples(control, test.metric_target)
-        control_ctr = (
-            control.clicks / control.impressions if control.impressions > 0 else 0.0
-        )
-        control_cr = control.conversions / control.clicks if control.clicks > 0 else 0.0
+        control_samples = samples[control_name]
+        control_stats = self._variant_stats(control_samples)
 
-        variant_stats = []
-        best_variant: Optional[ABTestVariant] = None
-        best_p_value = 1.0
-        significant_lift = False
-
-        for variant in variants:
-            samples = self._build_samples(variant, test.metric_target)
-            n = len(samples)
-
-            if test.metric_target == "ctr":
-                metric_value = (
-                    variant.clicks / variant.impressions
-                    if variant.impressions > 0
-                    else 0.0
-                )
-                baseline_value = control_ctr
-                n_baseline = control.impressions
-            elif test.metric_target == "conversion_rate":
-                metric_value = (
-                    variant.conversions / variant.clicks if variant.clicks > 0 else 0.0
-                )
-                baseline_value = control_cr
-                n_baseline = control.clicks
-            else:  # roi
-                metric_value = (
-                    variant.revenue / variant.impressions
-                    if variant.impressions > 0
-                    else 0.0
-                )
-                baseline_value = (
-                    control.revenue / control.impressions
-                    if control.impressions > 0
-                    else 0.0
-                )
-                n_baseline = control.impressions
-
-            # t-test on synthetic binary/revenue samples
-            if len(control_samples) > 0 and n > 0 and baseline_value != metric_value:
-                _, p_value = stats.ttest_ind(control_samples, samples, equal_var=False)
-                p_value = float(p_value) if not math.isnan(p_value) else 1.0
-            else:
-                p_value = 1.0
-
-            # Confidence interval for difference in means/proportions
-            diff = metric_value - baseline_value
-            if len(control_samples) > 0 and n > 0:
-                se = math.sqrt(
-                    baseline_value * (1 - baseline_value) / max(len(control_samples), 1)
-                    + metric_value * (1 - metric_value) / max(n, 1)
-                )
-            else:
-                se = 0.0
-            margin = 1.96 * se
-            ci = [diff - margin, diff + margin]
-
-            # Lift vs control
-            lift_pct = (
-                ((metric_value - baseline_value) / baseline_value * 100.0)
-                if baseline_value > 0
-                else 0.0
-            )
-
-            # Power
-            power = self._power_for_proportions(
-                n_baseline, baseline_value, n, metric_value
-            )
-
-            is_significant = p_value < 0.05
-            sample_size_reached = n >= 1000
-
-            if is_significant and p_value < best_p_value:
-                best_p_value = p_value
-                best_variant = variant
-                significant_lift = lift_pct > 0
-
-            variant_stats.append(
-                {
-                    "name": variant.name,
-                    "traffic_pct": variant.traffic_pct,
-                    "impressions": variant.impressions,
-                    "clicks": variant.clicks,
-                    "conversions": variant.conversions,
-                    "revenue": variant.revenue,
-                    "ctr": (
-                        variant.clicks / variant.impressions
-                        if variant.impressions > 0
-                        else 0.0
-                    ),
-                    "conversion_rate": (
-                        variant.conversions / variant.clicks
-                        if variant.clicks > 0
-                        else 0.0
-                    ),
-                    "roi": (
-                        variant.revenue / variant.impressions
-                        if variant.impressions > 0
-                        else 0.0
-                    ),
-                    "lift_pct": lift_pct,
-                    "p_value": p_value,
-                    "is_significant": is_significant,
-                    "sample_size_reached": sample_size_reached,
-                    "confidence_interval": ci,
-                    "power": power,
-                }
-            )
-
-        if best_variant and significant_lift:
-            recommendation = (
-                f"{best_variant.name} 显著优于 control (p={best_p_value:.4f})"
-            )
-        elif best_variant and not significant_lift:
-            recommendation = "control 更优"
-        else:
-            recommendation = "继续观察"
-
-        days_running = 0
-        if test.start_date:
-            days_running = max(0, (datetime.utcnow() - test.start_date).days)
-
-        return {
-            "test_info": {
-                "name": test.name,
-                "status": test.status,
-                "metric_target": test.metric_target,
-                "start_date": test.start_date.isoformat() if test.start_date else None,
-                "days_running": days_running,
-            },
-            "variants": variant_stats,
-            "recommendation": recommendation,
-        }
-
-    async def check_anomaly(
-        self, db: AsyncSession, test_id: uuid.UUID
-    ) -> Optional[Dict]:
-        """Detect metric anomalies using a sliding mean ± 3σ window."""
-        test, variants = await self._get_test_and_variants(db, test_id)
-        if test is None:
-            raise ValueError("Test not found")
-
-        alerts = []
-        for variant in variants:
-            history = self._history.get(test_id, {}).get(variant.name, [])
-            if len(history) < 10:
+        comparisons: List[VariantComparison] = []
+        for variant_name, variant_samples in samples.items():
+            if variant_name == control_name:
                 continue
 
-            for metric_idx, metric_name in enumerate(["ctr", "conversion_rate"]):
-                values = cast(List[float], [h[metric_idx + 1] for h in history])
-                mean = float(np.mean(values[:-1]))
-                std = float(np.std(values[:-1]))
-                current = values[-1]
-                lower = mean - 3 * std
-                upper = mean + 3 * std
+            treatment_stats = self._variant_stats(variant_samples)
+            diff = treatment_stats.mean - control_stats.mean
+            relative_lift = (
+                (diff / control_stats.mean * 100.0) if control_stats.mean != 0 else 0.0
+            )
+            ci = self._confidence_interval(control_samples, variant_samples)
+            p_ttest = self._ttest(control_samples, variant_samples)
+            p_mw = self._mann_whitney(control_samples, variant_samples)
+            power = self._power(control_samples, variant_samples)
+            mde = self._mde_absolute(control_samples, variant_samples)
+            sample_size = self._sample_size_per_variant(
+                control_stats.mean, control_stats.std, mde
+            )
 
-                if current < lower or current > upper:
-                    severity = (
-                        "critical" if abs(current - mean) > 5 * std else "warning"
-                    )
-                    alerts.append(
-                        {
-                            "variant": variant.name,
-                            "metric": metric_name,
-                            "current_value": current,
-                            "expected_range": [lower, upper],
-                            "severity": severity,
-                        }
-                    )
+            comparisons.append(
+                VariantComparison(
+                    variant_name=variant_name,
+                    control_name=control_name,
+                    n_treatment=treatment_stats.n,
+                    n_control=control_stats.n,
+                    mean_treatment=treatment_stats.mean,
+                    mean_control=control_stats.mean,
+                    diff=diff,
+                    relative_lift_pct=relative_lift,
+                    p_value_ttest=p_ttest,
+                    p_value_mannwhitney=p_mw,
+                    confidence_interval_95=ci,
+                    power=power,
+                    mde_absolute=mde,
+                    recommended_sample_size=sample_size,
+                    is_significant=p_ttest < 0.05,
+                )
+            )
 
-        return alerts[0] if alerts else None
+        return {
+            "experiment_id": str(experiment_id),
+            "metric": metric,
+            "control": {
+                "name": control_name,
+                "n": control_stats.n,
+                "mean": control_stats.mean,
+                "std": control_stats.std,
+            },
+            "comparisons": [c.__dict__ for c in comparisons],
+        }

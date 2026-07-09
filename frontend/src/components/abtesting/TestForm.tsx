@@ -52,10 +52,9 @@ export default function TestForm({ open, onClose, onCreated }: TestFormProps) {
         method: 'POST',
         body: JSON.stringify({
           name,
-          campaign_id: campaignId,
-          metric_target: metric,
-          traffic_split: trafficSplit / 100,
-          variants_config: variants.map((v) => ({ name: v.name, traffic_pct: v.pct / 100 })),
+          success_metric: metric,
+          traffic_split: trafficSplit,
+          variants: variants.map((v) => ({ name: v.name, traffic_allocation: v.pct, config: {} })),
         }),
       });
       onCreated();

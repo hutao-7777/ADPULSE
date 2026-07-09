@@ -5,6 +5,7 @@ export interface ABTest {
   status: 'draft' | 'running' | 'stopped' | 'completed';
   traffic_split: number;
   metric_target: 'ctr' | 'conversion_rate' | 'roi';
+  min_sample_size?: number;
   start_date: string | null;
   end_date: string | null;
   winner: string | null;

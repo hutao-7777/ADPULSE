@@ -1,7 +1,6 @@
 """Traffic quality and fraud alert API endpoints."""
 
 import uuid
-from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import Depends, HTTPException, status
@@ -10,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import APIRouter
-from app.models.models import FraudAlert, TrafficQualityScore
+from app.models import FraudAlert, TrafficQualityScore
+from app.models.base import utc_now
 from app.schemas.traffic import (
     FraudAlertResponse,
     QualityTrendResponse,
@@ -19,7 +19,7 @@ from app.schemas.traffic import (
 )
 from app.services.traffic_quality_engine import TrafficQualityEngine
 
-router = APIRouter(prefix="/api/v2/traffic", tags=["traffic"])
+router = APIRouter(prefix="/api/traffic", tags=["traffic"])
 
 _engine = TrafficQualityEngine()
 
@@ -52,7 +52,7 @@ async def assess_traffic(
             detail="Invalid campaign_id",
         )
 
-    date = request.date or datetime.utcnow()
+    date = request.date or utc_now()
     date = date.replace(hour=0, minute=0, second=0, microsecond=0)
 
     raw_metrics = request.raw_metrics or {}

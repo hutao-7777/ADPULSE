@@ -1,4 +1,4 @@
-"""Integration tests for authentication and v2 production services."""
+"""Integration tests for AdPulse production services."""
 
 import uuid
 from typing import Any, cast
@@ -14,7 +14,7 @@ def _unwrap(resp) -> dict[str, Any]:
 
 async def _login_admin(client) -> dict:
     resp = await client.post(
-        "/api/v2/auth/login",
+        "/api/auth/login",
         json={"email": "admin@example.com", "password": "admin123"},
     )
     assert resp.status_code == 200
@@ -27,7 +27,7 @@ async def test_auth_login_and_profile(client):
     assert tokens["token_type"] == "bearer"
 
     me = await client.get(
-        "/api/v2/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"}
+        "/api/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"}
     )
     assert me.status_code == 200
     assert _unwrap(me)["email"] == "admin@example.com"
@@ -38,27 +38,27 @@ async def test_auth_register_refresh_and_api_keys(client):
     admin_token = admin["access_token"]
 
     register = await client.post(
-        "/api/v2/auth/register",
+        "/api/auth/register",
         json={"email": "advertiser@example.com", "password": "secret123"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert register.status_code == 201
 
     user_tokens = await client.post(
-        "/api/v2/auth/login",
+        "/api/auth/login",
         json={"email": "advertiser@example.com", "password": "secret123"},
     )
     assert user_tokens.status_code == 200
     refresh_token = _unwrap(user_tokens)["refresh_token"]
 
     refreshed = await client.post(
-        "/api/v2/auth/refresh", json={"refresh_token": refresh_token}
+        "/api/auth/refresh", json={"refresh_token": refresh_token}
     )
     assert refreshed.status_code == 200
     assert "access_token" in _unwrap(refreshed)
 
     key_resp = await client.post(
-        "/api/v2/auth/api-keys",
+        "/api/auth/api-keys",
         json={"name": "dsp-test", "scopes": ["rtb:write"]},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -66,29 +66,27 @@ async def test_auth_register_refresh_and_api_keys(client):
     raw_key = _unwrap(key_resp)["key"]
 
     list_resp = await client.get(
-        "/api/v2/auth/api-keys", headers={"Authorization": f"Bearer {admin_token}"}
+        "/api/auth/api-keys", headers={"Authorization": f"Bearer {admin_token}"}
     )
     assert list_resp.status_code == 200
     assert any(k["name"] == "dsp-test" for k in _unwrap(list_resp))
 
-    check = await client.get(
-        "/api/v2/auth/api-key-check", headers={"X-API-Key": raw_key}
-    )
+    check = await client.get("/api/auth/api-key-check", headers={"X-API-Key": raw_key})
     assert check.status_code == 200
     assert _unwrap(check)["valid"] is True
 
 
-async def test_rtb_v2_auction(client):
+async def test_rtb_auction(client):
     admin = await _login_admin(client)
     key_resp = await client.post(
-        "/api/v2/auth/api-keys",
+        "/api/auth/api-keys",
         json={"name": "rtb-test", "scopes": ["rtb:write"]},
         headers={"Authorization": f"Bearer {admin['access_token']}"},
     )
     raw_key = _unwrap(key_resp)["key"]
 
     auction = await client.post(
-        "/api/v2/rtb/auction",
+        "/api/rtb/auction",
         json={
             "request_id": "req-1",
             "impression_id": "imp-1",
@@ -107,12 +105,12 @@ async def test_rtb_v2_auction(client):
     assert data["latency_ms"] >= 0
 
 
-async def test_agent_v2_config_and_run(client):
+async def test_agent_config_and_run(client):
     admin = await _login_admin(client)
     token = admin["access_token"]
 
     config_resp = await client.post(
-        "/api/v2/agent/configs",
+        "/api/agent/configs",
         json={
             "name": "test-agent",
             "goal": "maximize roi",
@@ -126,7 +124,7 @@ async def test_agent_v2_config_and_run(client):
     config_id = _unwrap(config_resp)["id"]
 
     run_resp = await client.post(
-        f"/api/v2/agent/{config_id}/run",
+        f"/api/agent/{config_id}/run",
         json={"goal": "maximize roi", "max_steps": 2},
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -136,22 +134,22 @@ async def test_agent_v2_config_and_run(client):
     assert "final_output" in data
 
 
-async def test_ab_v2_engine_assign():
-    from app.services.ab_test_v2_engine import ABTestV2Engine
+async def test_ab_engine_assign():
+    from app.services.ab_test_engine import ABTestEngine
 
-    engine = ABTestV2Engine()
+    engine = ABTestEngine()
     bucket = engine._hash_bucket("user-1", uuid.uuid4())
     assert 0 <= bucket < 100
 
 
-async def test_attribution_v2_compare_models():
-    from datetime import datetime
+async def test_attribution_compare_models():
+    from datetime import datetime, timezone
     from types import SimpleNamespace
 
-    from app.services.attribution_v2_engine import AttributionV2Engine
+    from app.services.attribution_engine import AttributionEngine
 
-    engine = AttributionV2Engine()
-    now = datetime.utcnow()
+    engine = AttributionEngine()
+    now = datetime.now(timezone.utc)
     touchpoints = [
         SimpleNamespace(
             id=uuid.uuid4(),
@@ -173,12 +171,12 @@ async def test_attribution_v2_compare_models():
     assert "shapley" in comparison
 
 
-async def test_ab_v2_experiment_lifecycle(client):
+async def test_ab_experiment_lifecycle(client):
     admin = await _login_admin(client)
     token = admin["access_token"]
 
     create_resp = await client.post(
-        "/api/v2/abtests",
+        "/api/abtests",
         json={
             "name": "cta_button_color_2024",
             "description": "测试CTA按钮颜色对转化率的影响",
@@ -209,7 +207,7 @@ async def test_ab_v2_experiment_lifecycle(client):
 
     # Invalid: allocations do not sum to 100
     invalid = await client.post(
-        "/api/v2/abtests",
+        "/api/abtests",
         json={
             "name": "bad",
             "traffic_split": 50,
@@ -227,7 +225,7 @@ async def test_ab_v2_experiment_lifecycle(client):
 
     # Start experiment
     start = await client.patch(
-        f"/api/v2/abtests/{exp_id}/status",
+        f"/api/abtests/{exp_id}/status",
         json={"status": "running"},
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -236,7 +234,7 @@ async def test_ab_v2_experiment_lifecycle(client):
 
     # Record exposure and conversion
     record = await client.post(
-        f"/api/v2/abtests/{exp_id}/record",
+        f"/api/abtests/{exp_id}/record",
         json={
             "user_id": "user-1",
             "event_type": "exposure",
@@ -248,7 +246,7 @@ async def test_ab_v2_experiment_lifecycle(client):
 
     # Duplicate exposure should be silently accepted
     dup = await client.post(
-        f"/api/v2/abtests/{exp_id}/record",
+        f"/api/abtests/{exp_id}/record",
         json={
             "user_id": "user-1",
             "event_type": "exposure",
@@ -259,7 +257,7 @@ async def test_ab_v2_experiment_lifecycle(client):
     assert dup.status_code == 201
 
     conversion = await client.post(
-        f"/api/v2/abtests/{exp_id}/record",
+        f"/api/abtests/{exp_id}/record",
         json={
             "user_id": "user-1",
             "event_type": "conversion",
@@ -271,21 +269,21 @@ async def test_ab_v2_experiment_lifecycle(client):
 
     # Pause / resume / stop
     paused = await client.patch(
-        f"/api/v2/abtests/{exp_id}/status",
+        f"/api/abtests/{exp_id}/status",
         json={"status": "paused"},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert paused.status_code == 200
 
     resumed = await client.patch(
-        f"/api/v2/abtests/{exp_id}/status",
+        f"/api/abtests/{exp_id}/status",
         json={"status": "running"},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resumed.status_code == 200
 
     stopped = await client.patch(
-        f"/api/v2/abtests/{exp_id}/status",
+        f"/api/abtests/{exp_id}/status",
         json={"status": "stopped"},
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -293,19 +291,19 @@ async def test_ab_v2_experiment_lifecycle(client):
 
     # Cannot restart a stopped experiment
     restart = await client.patch(
-        f"/api/v2/abtests/{exp_id}/status",
+        f"/api/abtests/{exp_id}/status",
         json={"status": "running"},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert restart.status_code == 400
 
 
-async def test_ab_v2_status_transition_validation(client):
+async def test_ab_status_transition_validation(client):
     admin = await _login_admin(client)
     token = admin["access_token"]
 
     create_resp = await client.post(
-        "/api/v2/abtests",
+        "/api/abtests",
         json={
             "name": "incomplete",
             "traffic_split": 50,
@@ -322,20 +320,20 @@ async def test_ab_v2_status_transition_validation(client):
 
     # Missing min_sample_size / max_duration_days
     bad = await client.patch(
-        f"/api/v2/abtests/{exp_id}/status",
+        f"/api/abtests/{exp_id}/status",
         json={"status": "running"},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert bad.status_code == 400
 
 
-async def test_attribution_v2_journey_lifecycle(client):
+async def test_attribution_journey_lifecycle(client):
     admin = await _login_admin(client)
     token = admin["access_token"]
     campaign_id = str(uuid.uuid4())
 
     create_resp = await client.post(
-        "/api/v2/attribution/journeys",
+        "/api/attribution/journeys",
         json={
             "user_id": "user-journey-1",
             "touchpoints": [
@@ -377,7 +375,7 @@ async def test_attribution_v2_journey_lifecycle(client):
 
     # Invalid channel
     invalid_channel = await client.post(
-        "/api/v2/attribution/journeys",
+        "/api/attribution/journeys",
         json={
             "user_id": "u1",
             "touchpoints": [
@@ -398,7 +396,7 @@ async def test_attribution_v2_journey_lifecycle(client):
 
     # Conversion before last touchpoint
     invalid_time = await client.post(
-        "/api/v2/attribution/journeys",
+        "/api/attribution/journeys",
         json={
             "user_id": "u1",
             "touchpoints": [
@@ -419,7 +417,7 @@ async def test_attribution_v2_journey_lifecycle(client):
 
     # Compute attribution
     compute = await client.post(
-        f"/api/v2/attribution/journeys/{journey_id}/compute",
+        f"/api/attribution/journeys/{journey_id}/compute",
         json={"models": ["first_touch", "last_touch", "linear", "shapley"]},
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -435,7 +433,7 @@ async def test_attribution_v2_journey_lifecycle(client):
 
     # Missing journey
     missing = await client.post(
-        f"/api/v2/attribution/journeys/{uuid.uuid4()}/compute",
+        f"/api/attribution/journeys/{uuid.uuid4()}/compute",
         json={},
         headers={"Authorization": f"Bearer {token}"},
     )

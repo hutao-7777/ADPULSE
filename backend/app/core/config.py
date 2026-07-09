@@ -1,12 +1,11 @@
 """Application configuration loaded from environment variables."""
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """AdPulse settings. Runtime defaults target SQLite for local/demo use;
-    override with environment variables for PostgreSQL/Redis production stacks.
-    """
+    """AdPulse settings. Runtime target is SQLite via aiosqlite."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -19,26 +18,18 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
-    # Database: SQLite by default for local/demo; PostgreSQL in production.
     DATABASE_URL: str = "sqlite+aiosqlite:///./adpulse.db"
-    DATABASE_POOL_SIZE: int = 10
-    DATABASE_MAX_OVERFLOW: int = 20
-    DATABASE_POOL_RECYCLE: int = 1800
 
-    # Redis: unused in SQLite demo mode.
-    REDIS_URL: str = "redis://localhost:6379/0"
-    REDIS_POOL_MAX_CONNECTIONS: int = 50
-
-    # Security placeholders for future auth implementation.
-    SECRET_KEY: str = "change-me-in-production"
+    # Security settings. SECRET_KEY must be explicitly set in production.
+    SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
-    # CORS whitelist (comma-separated string, no wildcard in production).
-    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+    # CORS whitelist (comma-separated string). Wildcards are not allowed by default.
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost"
 
-    # LLM provider placeholders for future agent integration.
+    # LLM provider placeholders for the agent.
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
     LLM_PROVIDER: str = "openai"
@@ -47,9 +38,23 @@ class Settings(BaseSettings):
     # Agent memory.
     AGENT_MEMORY_TOP_K: int = 5
 
-    # Migration control: when true, main.py skips create_all and expects
-    # ``alembic upgrade head`` to have been run externally.
-    USE_ALEMBIC: bool = False
+    # Public registration control.
+    ENABLE_PUBLIC_REGISTRATION: bool = False
+
+    @model_validator(mode="after")
+    def _validate_security(self):
+        key = (self.SECRET_KEY or "").strip()
+        if not key or key.lower() in {"change-me", "change-me-in-production", "secret"}:
+            raise ValueError(
+                "SECRET_KEY must be set to a non-default value. "
+                "Set it via the SECRET_KEY environment variable."
+            )
+        if "*" in self.CORS_ORIGINS:
+            raise ValueError(
+                "CORS_ORIGINS cannot contain wildcards. "
+                "Use a comma-separated list of exact origins."
+            )
+        return self
 
     @property
     def cors_origins_list(self) -> list[str]:
@@ -57,11 +62,6 @@ class Settings(BaseSettings):
         return [
             origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()
         ]
-
-    @property
-    def is_postgres(self) -> bool:
-        """Return True when the configured database driver is PostgreSQL."""
-        return self.DATABASE_URL.startswith("postgresql")
 
 
 settings = Settings()

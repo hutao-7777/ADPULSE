@@ -7,7 +7,8 @@ from typing import Dict, List
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import FraudAlert, TrafficQualityScore
+from app.models import FraudAlert, TrafficQualityScore
+from app.models.base import utc_now
 
 
 class TrafficQualityEngine:
@@ -202,7 +203,7 @@ class TrafficQualityEngine:
         hours: int = 24,
     ) -> List[Dict]:
         """Generate fraud alerts from recent quality scores."""
-        since = datetime.utcnow() - timedelta(hours=hours)
+        since = utc_now() - timedelta(hours=hours)
         result = await db.execute(
             select(TrafficQualityScore)
             .where(TrafficQualityScore.campaign_id == campaign_id)
@@ -269,7 +270,7 @@ class TrafficQualityEngine:
         days: int = 7,
     ) -> List[Dict]:
         """Return daily quality scores for the past N days."""
-        since = datetime.utcnow() - timedelta(days=days)
+        since = utc_now() - timedelta(days=days)
         result = await db.execute(
             select(TrafficQualityScore)
             .where(TrafficQualityScore.campaign_id == campaign_id)

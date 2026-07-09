@@ -7,7 +7,6 @@ extend-exclude = '''
   | \\.git
   | \\venv
   | \\.pytest_cache
-  | alembic/versions
 )/
 '''
 
@@ -25,9 +24,8 @@ ignore_missing_imports = false
 exclude = [
     "venv",
     ".pytest_cache",
-    "alembic/versions",
 ]
 
 [[tool.mypy.overrides]]
-module = ["scipy.*", "pgvector.sqlalchemy"]
+module = ["scipy.*", "statsmodels.*", "openai.*", "anthropic.*"]
 ignore_missing_imports = true

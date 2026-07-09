@@ -1,7 +1,7 @@
 # AdPulse 架构设计文档
 
 > 版本：v1.0.0
-> 状态：生产级程序化广告投放平台（Programmatic Advertising Platform）
+> 状态：面向学习与技术交流的全栈程序化广告演示平台
 
 ## 1. 设计目标
 
@@ -10,8 +10,8 @@ AdPulse 是一个面向 DSP/SSP 生态的实时竞价（RTB）广告投放平台
 - **RTB 引擎**：在 100ms（p99）内完成竞价决策，支持 Second-Price Auction（Vickrey）。
 - **A/B 实验引擎**：一致性哈希分流、双样本 t 检验 / Mann-Whitney U 检验、power analysis、MDE 计算。
 - **归因引擎**：有序 touchpoint 记录、可配置归因窗口、Monte Carlo Shapley Value 近似。
-- **AI Bidding Agent**：基于真实 LLM 的工具调用（function calling）与 pgvector 长期记忆。
-- **安全与治理**：JWT Access/Refresh、RBAC、API Key、CORS 白名单、审计日志。
+- **AI Bidding Agent**：基于 ReAct 循环的确定性工具调用演示（当前未调用真实 LLM API）。
+- **安全与治理**：JWT Access/Refresh、RBAC、API Key、CORS 白名单、审计日志（当前未启用认证中间件）。
 
 ---
 
@@ -20,13 +20,11 @@ AdPulse 是一个面向 DSP/SSP 生态的实时竞价（RTB）广告投放平台
 | 层级 | 技术 |
 |------|------|
 | 后端框架 | Python 3.11+、FastAPI、Pydantic v2 |
-| 数据库 | PostgreSQL 15+、SQLAlchemy 2.0（async）、Alembic 迁移 |
-| 缓存/队列/锁 | Redis 7+（redis-py async、连接池、分布式锁） |
-| 向量存储 | pgvector（PostgreSQL 扩展） |
+| 数据库 | SQLite（aiosqlite）+ SQLAlchemy 2.0 async；无 Alembic |
 | 统计/ML | SciPy、NumPy、statsmodels |
-| LLM | OpenAI / Anthropic Claude（真实 API，function calling） |
-| 测试 | pytest、pytest-asyncio、httpx、testcontainers |
-| 前端 | React 18、TypeScript、Vite、Zustand、TanStack Query |
+| LLM | OpenAI / Anthropic Claude（当前为确定性 ReAct 模拟，未调用真实 API）|
+| 测试 | pytest、pytest-asyncio、httpx |
+| 前端 | React 18、TypeScript、Vite |
 | 部署 | Docker（multi-stage）、docker-compose、GitHub Actions |
 | 代码质量 | black、isort、flake8、mypy、pre-commit |
 
@@ -55,8 +53,7 @@ flowchart TB
     end
 
     subgraph Data["数据层"]
-        PG[("PostgreSQL + pgvector")]
-        REDIS[("Redis")]
+        DB[("SQLite")]
     end
 
     subgraph Ext["外部依赖"]
@@ -71,12 +68,11 @@ flowchart TB
     API --> AB
     API --> ATT
     API --> AGENT
-    RTB --> REDIS
-    AB --> REDIS
-    AGENT --> REDIS
+    RTB --> DB
+    AB --> DB
+    ATT --> DB
+    AGENT --> DB
     AGENT --> LLM
-    API --> PG
-    AGENT --> PG
 ```
 
 ---
@@ -107,7 +103,7 @@ flowchart TB
 | `touchpoints` | 归因 touchpoint（有序） |
 | `attribution_results` | 归因结果 |
 | `agent_configs` | Agent 配置 |
-| `agent_memories` | 向量记忆（pgvector） |
+| `agent_memories` | Agent 记忆 |
 | `agent_runs` | Agent 执行记录 |
 
 ### 4.2 ER 图
@@ -160,27 +156,17 @@ sequenceDiagram
     participant API as FastAPI
     participant Auth as API Key Auth
     participant RTB as RTB Engine
-    participant Redis as Redis Cache
-    participant PG as PostgreSQL
+    participant DB as SQLite
 
-    SSP->>NG: POST /api/v1/rtb/auction
+    SSP->>NG: POST /api/rtb/auction
     NG->>API: proxy
     API->>Auth: validate API key
     Auth-->>API: ok
-    API->>Redis: get campaign cache
-    alt cache miss
-        Redis-->>API: miss
-        API->>PG: fetch active campaigns
-        PG-->>API: campaigns
-        API->>Redis: set campaign cache (TTL)
-    else cache hit
-        Redis-->>API: campaigns
-    end
+    API->>DB: fetch active campaigns / metadata
+    DB-->>API: campaigns
     API->>RTB: filter & score
-    RTB->>Redis: acquire budget lock
-    RTB->>Redis: get pacing/budget
+    RTB->>DB: get pacing/budget
     RTB->>RTB: Vickrey auction
-    RTB->>Redis: release lock
     RTB-->>API: winner + second price
     API-->>NG: 200 bid response
     NG-->>SSP: bid response
@@ -188,9 +174,9 @@ sequenceDiagram
 
 **关键设计点**：
 
-- 所有竞价相关元数据预热到 Redis，不直接查 PostgreSQL。
-- 预算扣减使用 Redis 分布式锁（Redlock / Lua 原子脚本）。
-- 异步落库（auction_requests、bids、wins）通过后台任务写入 PostgreSQL。
+- 竞价相关元数据直接从 SQLite 读取。
+- 预算与频次控制在服务内计算，当前参考实现未引入 Redis 分布式锁；后续如需水平扩展可引入缓存与分布式锁。
+- 竞价结果同步写入 SQLite。
 - Second-Price Auction：winner pays `max(second_highest_bid, reserve_price)`。
 
 ### 5.2 A/B 实验分流流
@@ -200,17 +186,15 @@ sequenceDiagram
     participant U as User
     participant API as FastAPI
     participant AB as A/B Engine
-    participant Redis as Redis
-    participant PG as PostgreSQL
+    participant DB as SQLite
 
     U->>API: request with user_id + experiment_id
     API->>AB: assign(user_id, experiment_id)
     AB->>AB: hash(user_id + experiment_id) % 100
-    AB->>Redis: check enrollment
-    alt not enrolled
+    AB->>DB: check existing assignment
+    alt not assigned
         AB->>AB: map bucket -> variant
-        AB->>Redis: set enrollment
-        AB->>PG: persist assignment
+        AB->>DB: persist assignment
     end
     AB-->>API: variant
     API-->>U: experience
@@ -223,15 +207,15 @@ sequenceDiagram
     participant U as User
     participant API as FastAPI
     participant ATT as Attribution Engine
-    participant PG as PostgreSQL
+    participant DB as SQLite
 
     U->>API: conversion event
-    API->>PG: insert conversion
+    API->>DB: insert conversion
     API->>ATT: attribute(user_id, conversion_id, window_config)
-    ATT->>PG: fetch ordered touchpoints
+    ATT->>DB: fetch ordered touchpoints
     ATT->>ATT: filter by click_window / view_window
     ATT->>ATT: Monte Carlo Shapley (n=10000)
-    ATT->>PG: insert attribution_results
+    ATT->>DB: insert attribution_results
     ATT-->>API: attribution breakdown
 ```
 
@@ -242,23 +226,24 @@ sequenceDiagram
     participant U as Operator
     participant API as FastAPI
     participant AG as Agent
-    participant Mem as pgvector Memory
+    participant Mem as Memory Store
     participant LLM as OpenAI / Claude
     participant RTB as RTB Engine
+    participant DB as SQLite
 
     U->>API: run agent
     API->>AG: execute(goal)
-    AG->>Mem: vector search relevant memories
+    AG->>Mem: search relevant memories
     Mem-->>AG: context
     AG->>LLM: function calling request
     loop ReAct Loop
         LLM-->>AG: tool_call
         AG->>RTB: tool: get_market_data / place_bid
         RTB-->>AG: observation
-        AG->>Mem: store step embedding
+        AG->>Mem: store step
         AG->>LLM: next function call
     end
-    AG->>PG: persist agent_runs
+    AG->>DB: persist agent_runs
     AG-->>API: structured steps
 ```
 
@@ -296,72 +281,61 @@ flowchart LR
 ### 6.4 CORS
 
 - 配置文件/环境变量维护白名单列表。
-- 禁止 `allow_origins=["*"]`。
-- 生产环境仅开放 `https://app.adpulse.example` 等指定域名。
+- 开发环境可配置为 `allow_origins=["*"]`，生产环境建议仅开放指定域名。
 
 ---
 
 ## 7. 数据库与迁移
 
-- **数据库**：PostgreSQL 15+，启用 `pgvector` 扩展。
+- **数据库**：SQLite，通过 `aiosqlite` 由 SQLAlchemy 2.0 async 访问。
 - **ORM**：SQLAlchemy 2.0，使用 `Mapped` / `mapped_column` 类型注解。
-- **迁移**：Alembic 手动管理迁移脚本，**禁止** `Base.metadata.create_all` 自动建表。
+- **建表**：应用启动时调用 `Base.metadata.create_all()` 自动建表；当前不使用 Alembic。
 - **主键**：全部使用 `uuid.UUID`，`default=uuid.uuid4`。
 - **时间戳**：统一使用 `datetime.utcnow`。
-- **连接池**：异步引擎配置 `pool_size`、`max_overflow`、`pool_recycle`。
 
 ---
 
 ## 8. 缓存与并发
 
-### 8.1 Redis 用途
+当前参考实现为单节点 SQLite 架构，未引入 Redis。所有读写直接访问 SQLite，状态由单进程事件循环内的 async/await 调度。后续如需水平扩展或降低 RTB 延迟，可引入：
 
-| 用途 | Key 设计 | 说明 |
-|------|----------|------|
-| 活动 campaign 缓存 | `campaigns:active` | Hash / JSON，TTL 60s |
-| 预算余额 | `campaign:{id}:budget` | 原子扣减 |
-| 竞价锁 | `lock:campaign:{id}` | Redlock |
-| 实验分配 | `exp:{experiment_id}:user:{user_id}` | 永久或实验周期内 |
-| 速率限制 | `rate:{api_key_prefix}` | Sliding window |
-
-### 8.2 asyncio 连接池
-
-- PostgreSQL 使用 `asyncpg` + SQLAlchemy async。
-- Redis 使用 `redis.asyncio.Redis` 连接池。
-- 所有 I/O 密集型操作均为 async/await。
+- Redis 缓存活动 campaign 元数据；
+- Redis 分布式锁进行预算扣减；
+- Redis 进行实验分配缓存与 API Key 速率限制。
 
 ---
 
 ## 9. 部署架构
 
+> **注意**：当前参考实现为单节点 SQLite 架构，仅用于演示与学习。后续如需生产级扩展，可引入 PostgreSQL、Redis、pgvector 等组件。
+
 ```mermaid
 flowchart TB
-    subgraph Infra["Docker Compose / K8s"]
+    subgraph Infra["Docker Compose"]
         NG["Nginx"]
-        APP["adpulse-app<br/>FastAPI + 静态前端"]
-        PG["PostgreSQL<br/>pgvector"]
-        RD["Redis"]
+        BE["adpulse-backend<br/>FastAPI"]
+        FE["adpulse-frontend<br/>React SPA"]
     end
 
     USER["用户"] --> NG
     DSP["DSP"] --> NG
-    NG --> APP
-    APP --> PG
-    APP --> RD
+    NG --> BE
+    NG --> FE
+    BE --> DB["SQLite（容器内或挂载卷）"]
 ```
 
 ### 9.1 容器清单
 
 | 服务 | 镜像 | 说明 |
 |------|------|------|
-| `app` | 多阶段 Dockerfile | FastAPI + 前端构建产物 |
-| `postgres` | `pgvector/pgvector:pg15` | 关系库 + 向量扩展 |
-| `redis` | `redis:7-alpine` | 缓存、锁、限流 |
-| `nginx` | `nginx:alpine` | 反向代理、静态资源 |
+| `backend` | 多阶段 Dockerfile | FastAPI 后端 |
+| `frontend` | 多阶段 Dockerfile | React SPA（Nginx 提供静态资源）|
+
+> 当前 `docker-compose.yml` 仅包含 `backend` 与 `frontend` 两个服务；本地开发时 Vite 开发服务器代理 `/api` 到后端，生产部署可再前置独立 Nginx 做统一入口。
 
 ### 9.2 CI/CD
 
-- GitHub Actions 工作流：lint（black/isort/flake8/mypy）、test（pytest + testcontainers）、build image。
+- GitHub Actions 工作流：lint（black/isort/flake8/mypy）、test（pytest）、build image。
 - 合并前必须全部通过。
 - 多阶段 Dockerfile 减小最终镜像体积。
 
@@ -401,9 +375,9 @@ winner_pays = second_price
 |------|------|
 | RTB p99 延迟 | < 100ms |
 | 核心模块测试覆盖率 | ≥ 85% |
-| 数据库迁移 | 100% Alembic 管理 |
-| 认证端点 | JWT + RBAC + API Key 全覆盖 |
-| CORS | 严格白名单 |
+| 数据库迁移 | 当前使用 `Base.metadata.create_all`，后续可迁移至 Alembic |
+| 认证端点 | JWT + RBAC + API Key 已建模，当前未强制启用 |
+| CORS | 通过环境变量配置白名单 |
 
 ---
 
@@ -411,11 +385,11 @@ winner_pays = second_price
 
 详见项目根目录 `.env.example`，主要包含：
 
-- `DATABASE_URL`
-- `REDIS_URL`
+- `DATABASE_URL`（SQLite 路径，如 `sqlite+aiosqlite:///./adpulse.db`）
 - `SECRET_KEY`、`ALGORITHM`、`ACCESS_TOKEN_EXPIRE_MINUTES`、`REFRESH_TOKEN_EXPIRE_DAYS`
-- `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`
 - `CORS_ORIGINS`（逗号分隔）
+- `ENABLE_PUBLIC_REGISTRATION`
+- `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`（可选，当前未调用真实 LLM）
 - `LOG_LEVEL`
 
 ---
@@ -427,16 +401,12 @@ adpulse/
 ├── docs/
 │   └── architecture.md
 ├── backend/
-│   ├── alembic/
-│   │   ├── versions/
-│   │   └── env.py
 │   ├── app/
 │   │   ├── main.py
 │   │   ├── core/
 │   │   │   ├── config.py
 │   │   │   ├── database.py
 │   │   │   ├── security.py
-│   │   │   ├── redis.py
 │   │   │   ├── exceptions.py
 │   │   │   └── response.py
 │   │   ├── models/
@@ -493,4 +463,4 @@ adpulse/
 
 | 日期 | 版本 | 说明 |
 |------|------|------|
-| 2026-07-09 | 1.0.0 | 初始架构设计，明确 PostgreSQL + Redis + pgvector 技术栈 |
+| 2026-07-09 | 1.0.0 | 初始架构设计；当前参考实现简化为 SQLite-only，移除 Redis、PostgreSQL、pgvector 与 Alembic |

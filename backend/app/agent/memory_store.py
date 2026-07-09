@@ -1,17 +1,29 @@
-"""Vector memory store backed by PostgreSQL pgvector."""
+"""Agent memory store with simple in-memory similarity over JSON embeddings."""
 
+import math
 import uuid
 from typing import List, Optional
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.llm_client import LLMClient
-from app.models.models import AgentMemory
+from app.models import AgentMemory
+
+
+def _cosine_similarity(a: List[float], b: List[float]) -> float:
+    if len(a) != len(b) or len(a) == 0:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
 
 class MemoryStore:
-    """Long-term memory for the bidding agent using pgvector similarity search."""
+    """Long-term memory for the bidding agent using JSON-stored embeddings."""
 
     def __init__(self, llm: Optional[LLMClient] = None) -> None:
         self.llm = llm or LLMClient()
@@ -26,7 +38,10 @@ class MemoryStore:
         metadata: Optional[dict] = None,
     ) -> AgentMemory:
         """Embed and store a memory."""
-        embedding = await self.llm.create_embedding(content)
+        try:
+            embedding = await self.llm.create_embedding(content)
+        except Exception:
+            embedding = []
         memory = AgentMemory(
             user_id=user_id,
             run_id=run_id,
@@ -48,19 +63,26 @@ class MemoryStore:
         top_k: int = 5,
     ) -> List[AgentMemory]:
         """Return the most similar memories for a query."""
-        embedding = await self.llm.create_embedding(query)
-        embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
+        try:
+            query_embedding = await self.llm.create_embedding(query)
+        except Exception:
+            query_embedding = []
 
-        stmt = select(AgentMemory).order_by(
-            AgentMemory.embedding.cosine_distance(embedding_str)
-        )
+        stmt = select(AgentMemory)
         if user_id:
             stmt = stmt.where(AgentMemory.user_id == user_id)
 
-        result = await db.execute(stmt.limit(top_k))
-        return list(result.scalars().all())
+        result = await db.execute(stmt)
+        memories = list(result.scalars().all())
 
-    async def ensure_extension(self, db: AsyncSession) -> None:
-        """Ensure the pgvector extension exists (PostgreSQL only)."""
-        await db.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        await db.commit()
+        if not query_embedding:
+            return memories[:top_k]
+
+        scored = []
+        for memory in memories:
+            emb = memory.embedding or []
+            score = _cosine_similarity(query_embedding, emb)
+            scored.append((score, memory))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [m for _, m in scored[:top_k]]

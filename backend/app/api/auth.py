@@ -7,13 +7,14 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.response import APIRouter
 from app.core.security import get_current_active_user, validate_api_key
-from app.models.models import ApiKey, User
+from app.models import ApiKey, User
 from app.services.auth_service import AuthService
 
-router = APIRouter(prefix="/api/v2/auth", tags=["auth"])
+router = APIRouter(prefix="/api/auth", tags=["auth"])
 auth_service = AuthService()
 
 
@@ -142,7 +143,12 @@ async def register(
     request: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Register a new user."""
+    """Register a new user (only when public registration is enabled)."""
+    if not settings.ENABLE_PUBLIC_REGISTRATION:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Public registration is disabled",
+        )
     user = await auth_service.create_user(
         db,
         email=request.email,
