@@ -302,10 +302,19 @@ class ABTestEngine:
         metric = metric_name or experiment.metric_name
         samples = await self._fetch_variant_samples(db, experiment_id, metric)
 
+        if not samples:
+            return {
+                "experiment_id": str(experiment_id),
+                "metric": metric,
+                "control": None,
+                "comparisons": [],
+                "message": "No metric data recorded for this experiment yet.",
+            }
+
         control_name: Optional[str] = "control"
         if control_name not in samples:
             # Fallback: first variant alphabetical.
-            control_name = sorted(samples.keys())[0] if samples else None
+            control_name = sorted(samples.keys())[0]
 
         if control_name is None or control_name not in samples:
             raise ValueError("No control variant found")

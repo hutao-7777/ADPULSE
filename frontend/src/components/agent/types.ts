@@ -103,3 +103,37 @@ export interface StepDurations {
   act: number;
   observe: number;
 }
+
+export interface AgentRunApiStep {
+  step: number;
+  thought: string;
+  tool: string | null;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  latency_ms: number;
+}
+
+export interface AgentRunApiResponse {
+  run_id: string;
+  goal: string;
+  final_output: string;
+  steps: AgentRunApiStep[];
+  latency_ms: number;
+}
+
+export interface AgentConfigCreate {
+  name: string;
+  goal: string;
+  llm_provider?: string;
+  llm_model?: string;
+  tools_enabled?: string[];
+  max_steps?: number;
+}
+
+export interface AgentConfigResponse {
+  id: string;
+  name: string;
+  goal: string;
+  llm_provider: string;
+  llm_model: string;
+}
