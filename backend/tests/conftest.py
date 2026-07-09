@@ -8,15 +8,11 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.api import (
-    abtest,
     abtest_v2,
-    agent,
     agent_v2,
-    attribution,
     attribution_v2,
     auth,
     dashboard,
-    rtb,
     rtb_v2,
     traffic,
 )
@@ -61,15 +57,11 @@ async def client():
     test_app = FastAPI(lifespan=lifespan)
     register_exception_handlers(test_app)
     test_app.include_router(auth.router)
-    test_app.include_router(attribution.router)
     test_app.include_router(attribution_v2.router)
     test_app.include_router(traffic.router)
-    test_app.include_router(rtb.router)
     test_app.include_router(rtb_v2.router)
-    test_app.include_router(abtest.router)
     test_app.include_router(abtest_v2.router)
     test_app.include_router(dashboard.router)
-    test_app.include_router(agent.router)
     test_app.include_router(agent_v2.router)
     test_app.dependency_overrides[get_db] = override_get_db
 

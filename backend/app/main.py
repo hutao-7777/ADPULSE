@@ -9,15 +9,11 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api import (
-    abtest,
     abtest_v2,
-    agent,
     agent_v2,
-    attribution,
     attribution_v2,
     auth,
     dashboard,
-    rtb,
     rtb_v2,
     traffic,
 )
@@ -89,15 +85,11 @@ app.add_middleware(
 register_exception_handlers(app)
 
 app.include_router(auth.router)
-app.include_router(attribution.router)
 app.include_router(attribution_v2.router)
 app.include_router(traffic.router)
-app.include_router(rtb.router)
 app.include_router(rtb_v2.router)
-app.include_router(abtest.router)
 app.include_router(abtest_v2.router)
 app.include_router(dashboard.router)
-app.include_router(agent.router)
 app.include_router(agent_v2.router)
 
 

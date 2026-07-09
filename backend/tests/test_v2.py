@@ -14,7 +14,7 @@ def _unwrap(resp) -> dict[str, Any]:
 
 async def _login_admin(client) -> dict:
     resp = await client.post(
-        "/api/auth/login",
+        "/api/v2/auth/login",
         json={"email": "admin@example.com", "password": "admin123"},
     )
     assert resp.status_code == 200
@@ -27,7 +27,7 @@ async def test_auth_login_and_profile(client):
     assert tokens["token_type"] == "bearer"
 
     me = await client.get(
-        "/api/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"}
+        "/api/v2/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"}
     )
     assert me.status_code == 200
     assert _unwrap(me)["email"] == "admin@example.com"
@@ -38,27 +38,27 @@ async def test_auth_register_refresh_and_api_keys(client):
     admin_token = admin["access_token"]
 
     register = await client.post(
-        "/api/auth/register",
+        "/api/v2/auth/register",
         json={"email": "advertiser@example.com", "password": "secret123"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert register.status_code == 201
 
     user_tokens = await client.post(
-        "/api/auth/login",
+        "/api/v2/auth/login",
         json={"email": "advertiser@example.com", "password": "secret123"},
     )
     assert user_tokens.status_code == 200
     refresh_token = _unwrap(user_tokens)["refresh_token"]
 
     refreshed = await client.post(
-        "/api/auth/refresh", json={"refresh_token": refresh_token}
+        "/api/v2/auth/refresh", json={"refresh_token": refresh_token}
     )
     assert refreshed.status_code == 200
     assert "access_token" in _unwrap(refreshed)
 
     key_resp = await client.post(
-        "/api/auth/api-keys",
+        "/api/v2/auth/api-keys",
         json={"name": "dsp-test", "scopes": ["rtb:write"]},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -66,12 +66,14 @@ async def test_auth_register_refresh_and_api_keys(client):
     raw_key = _unwrap(key_resp)["key"]
 
     list_resp = await client.get(
-        "/api/auth/api-keys", headers={"Authorization": f"Bearer {admin_token}"}
+        "/api/v2/auth/api-keys", headers={"Authorization": f"Bearer {admin_token}"}
     )
     assert list_resp.status_code == 200
     assert any(k["name"] == "dsp-test" for k in _unwrap(list_resp))
 
-    check = await client.get("/api/auth/api-key-check", headers={"X-API-Key": raw_key})
+    check = await client.get(
+        "/api/v2/auth/api-key-check", headers={"X-API-Key": raw_key}
+    )
     assert check.status_code == 200
     assert _unwrap(check)["valid"] is True
 
@@ -79,7 +81,7 @@ async def test_auth_register_refresh_and_api_keys(client):
 async def test_rtb_v2_auction(client):
     admin = await _login_admin(client)
     key_resp = await client.post(
-        "/api/auth/api-keys",
+        "/api/v2/auth/api-keys",
         json={"name": "rtb-test", "scopes": ["rtb:write"]},
         headers={"Authorization": f"Bearer {admin['access_token']}"},
     )

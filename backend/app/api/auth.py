@@ -13,7 +13,7 @@ from app.core.security import get_current_active_user, validate_api_key
 from app.models.models import ApiKey, User
 from app.services.auth_service import AuthService
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+router = APIRouter(prefix="/api/v2/auth", tags=["auth"])
 auth_service = AuthService()
 
 
