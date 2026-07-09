@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
 from app.models import ApiKey, User
+from app.models.base import utc_now
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security_bearer = HTTPBearer(auto_error=False)
@@ -200,12 +201,12 @@ async def validate_api_key(
             detail="Invalid API key",
         )
 
-    if key_record.expires_at and key_record.expires_at < datetime.now(timezone.utc):
+    if key_record.expires_at and key_record.expires_at < utc_now():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="API key expired",
         )
 
-    key_record.last_used_at = datetime.now(timezone.utc)
+    key_record.last_used_at = utc_now()
     await db.commit()
     return key_record

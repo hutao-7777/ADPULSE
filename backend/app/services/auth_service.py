@@ -2,7 +2,9 @@
 
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
+
+from app.models.base import utc_now
 from typing import Optional
 
 from fastapi import HTTPException, status
@@ -50,8 +52,7 @@ class AuthService:
         refresh = RefreshToken(
             user_id=user.id,
             token_hash=token_hash,
-            expires_at=datetime.now(timezone.utc)
-            + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+            expires_at=utc_now() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
         )
         db.add(refresh)
         await db.commit()
@@ -99,7 +100,7 @@ class AuthService:
             select(RefreshToken)
             .where(RefreshToken.user_id == user.id)
             .where(RefreshToken.revoked_at.is_(None))
-            .where(RefreshToken.expires_at > datetime.now(timezone.utc))
+            .where(RefreshToken.expires_at > utc_now())
             .order_by(RefreshToken.created_at.desc())
         )
         active_token = result.scalar_one_or_none()
@@ -123,7 +124,7 @@ class AuthService:
         )
         token = result.scalar_one_or_none()
         if token:
-            token.revoked_at = datetime.now(timezone.utc)
+            token.revoked_at = utc_now()
             await db.commit()
 
     async def create_api_key(
@@ -142,7 +143,7 @@ class AuthService:
 
         expires_at = None
         if expires_days:
-            expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
+            expires_at = utc_now() + timedelta(days=expires_days)
 
         api_key = ApiKey(
             user_id=user_id,
