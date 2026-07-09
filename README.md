@@ -149,7 +149,30 @@ pytest tests/test_api.py -v
 git clone https://github.com/wnzhang/make-ipinyou-data.git
 ```
 
-2. 进入 AdPulse 后端环境并执行导入脚本：
+2. 下载原始数据并生成广告主目录：
+
+从 [UCL 下载页](http://bunwell.cs.ucl.ac.uk/ipinyou.contest.dataset.zip) 下载 `ipinyou.contest.dataset.zip`，解压后得到 `ipinyou.contest.dataset` 文件夹，将其放到 `make-ipinyou-data/original-data/` 下：
+
+```text
+make-ipinyou-data/
+└── original-data/
+    └── ipinyou.contest.dataset/   ← 原始数据文件夹
+        ├── training2nd/
+        ├── training3rd/
+        ├── testing2nd/
+        └── testing3rd/
+```
+
+然后在 `make-ipinyou-data` 目录执行 `make all`（Windows 建议使用 WSL 或 Git Bash）：
+
+```bash
+cd make-ipinyou-data
+make all
+```
+
+处理完成后会出现广告主子目录，如 `1458/`、`2261/` 等。
+
+3. 进入 AdPulse 后端环境并执行导入脚本：
 
 ```bash
 cd backend
@@ -161,9 +184,10 @@ python scripts/import_ipinyou.py \
 ```
 
 参数说明：
-- `--data-dir`：make-ipinyou-data 根目录
+- `--data-dir`：make-ipinyou-data 根目录（处理后包含 `1458/` 等子目录）
 - `--advertiser`：广告主 ID，如 `1458`、`2261`、`2997` 等
-- `--limit`：导入 bid 日志条数上限，默认 50000
+- `--limit`：导入记录条数上限，默认 50000
+- `--format`：数据集格式，默认为 `formalized`（对应 `make-ipinyou-data` 输出）；如果你的数据是 `bid/imp/click/conv.log.txt` 格式，可设为 `raw`
 
 3. 导入完成后，打开前端页面「iPinYou 数据」即可查看：
 - 日曝光 / 点击趋势折线图
