@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api import abtest, agent, attribution, auth, dashboard, rtb, traffic
+from app.api import abtest, agent, attribution, auth, dashboard, ipinyou, rtb, traffic
 from app.core.config import settings
 from app.core.database import Base, engine
 from app.core.response import register_exception_handlers
@@ -86,6 +86,7 @@ app.include_router(traffic.router)
 app.include_router(rtb.router)
 app.include_router(abtest.router)
 app.include_router(dashboard.router)
+app.include_router(ipinyou.router)
 app.include_router(agent.router)
 
 

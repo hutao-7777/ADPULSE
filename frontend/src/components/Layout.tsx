@@ -10,6 +10,7 @@ import {
   LogOut,
   User,
   ChevronDown,
+  Database,
 } from 'lucide-react';
 import { cn } from '../utils/cn';
 import useAuthStore from '../stores/authStore';
@@ -26,6 +27,7 @@ const navItems: NavItem[] = [
   { path: '/attribution', label: '归因 & 流量', icon: GitBranch },
   { path: '/abtesting', label: 'A/B 测试', icon: FlaskConical },
   { path: '/agent', label: '智能 Agent', icon: BrainCircuit },
+  { path: '/ipinyou', label: 'iPinYou 数据', icon: Database },
   { path: '/api-keys', label: 'API Keys', icon: KeyRound },
 ];
 

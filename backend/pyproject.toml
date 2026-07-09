@@ -27,5 +27,5 @@ exclude = [
 ]
 
 [[tool.mypy.overrides]]
-module = ["scipy.*", "statsmodels.*", "openai.*", "anthropic.*"]
+module = ["scipy.*", "statsmodels.*", "openai.*", "anthropic.*", "tqdm.*"]
 ignore_missing_imports = true

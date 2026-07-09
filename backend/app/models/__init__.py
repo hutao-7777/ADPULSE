@@ -18,6 +18,13 @@ from app.models.campaign import (
     Creative,
     DailyMetric,
 )
+from app.models.ipinyou import (
+    IpinyouBid,
+    IpinyouClick,
+    IpinyouConv,
+    IpinyouDailyStat,
+    IpinyouImp,
+)
 from app.models.rtb import AuctionBid, AuctionRequest, AuctionWin
 from app.models.user import (
     ApiKey,
@@ -62,4 +69,9 @@ __all__ = [
     "AgentRun",
     "AgentStep",
     "AgentMemory",
+    "IpinyouBid",
+    "IpinyouImp",
+    "IpinyouClick",
+    "IpinyouConv",
+    "IpinyouDailyStat",
 ]

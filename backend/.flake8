@@ -6,3 +6,5 @@ exclude =
     __pycache__,
     .pytest_cache,
     venv
+per-file-ignores =
+    scripts/import_ipinyou.py: E402

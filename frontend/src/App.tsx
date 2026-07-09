@@ -12,6 +12,7 @@ import AttributionTraffic from './pages/AttributionTraffic';
 import ABTesting from './pages/ABTesting';
 import AgentLoop from './pages/AgentLoop';
 import ApiKeysPage from './pages/ApiKeysPage';
+import IpinyouData from './pages/IpinyouData';
 
 function App() {
   return (
@@ -80,6 +81,14 @@ function App() {
                   element={
                     <ProtectedRoute>
                       <ApiKeysPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/ipinyou"
+                  element={
+                    <ProtectedRoute>
+                      <IpinyouData />
                     </ProtectedRoute>
                   }
                 />
