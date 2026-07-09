@@ -16,6 +16,8 @@ export default function TestForm({ open, onClose, onCreated }: TestFormProps) {
   const [campaignId, setCampaignId] = useState(MOCK_CAMPAIGNS[0].id);
   const [metric, setMetric] = useState<'ctr' | 'conversion_rate' | 'roi'>('ctr');
   const [trafficSplit, setTrafficSplit] = useState(50);
+  const [minSampleSize, setMinSampleSize] = useState(100);
+  const [maxDurationDays, setMaxDurationDays] = useState(14);
   const [variants, setVariants] = useState([
     { name: 'control', pct: 50 },
     { name: 'variant_a', pct: 50 },
@@ -54,12 +56,16 @@ export default function TestForm({ open, onClose, onCreated }: TestFormProps) {
           name,
           success_metric: metric,
           traffic_split: trafficSplit,
+          min_sample_size: minSampleSize,
+          max_duration_days: maxDurationDays,
           variants: variants.map((v) => ({ name: v.name, traffic_allocation: v.pct, config: {} })),
         }),
       });
       onCreated();
       onClose();
       setName('');
+      setMinSampleSize(100);
+      setMaxDurationDays(14);
       setVariants([
         { name: 'control', pct: 50 },
         { name: 'variant_a', pct: 50 },
@@ -132,6 +138,29 @@ export default function TestForm({ open, onClose, onCreated }: TestFormProps) {
               className="w-full accent-accent"
             />
             <p className="text-[10px] text-muted mt-1">剩余流量将走 control variant</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs text-muted mb-1.5">最小样本量</label>
+              <input
+                type="number"
+                min={1}
+                value={minSampleSize}
+                onChange={(e) => setMinSampleSize(parseInt(e.target.value) || 0)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-accent"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-muted mb-1.5">最大运行天数</label>
+              <input
+                type="number"
+                min={1}
+                value={maxDurationDays}
+                onChange={(e) => setMaxDurationDays(parseInt(e.target.value) || 0)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-accent"
+              />
+            </div>
           </div>
 
           <div>
