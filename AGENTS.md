@@ -6,7 +6,7 @@ AdPulse is a **full-stack demonstrative platform for programmatic advertising**.
 
 The codebase is split into a Python/FastAPI backend (`backend/`) and a React/TypeScript frontend (`frontend/`), containerized together via Docker Compose.
 
-> **Important current state:** The repository contains PostgreSQL-oriented models and an Alembic migration, but the runnable stack uses SQLite. Legacy model names (`Auction`, `BidRecord`, `ABTest`, `ABTestVariant`) coexist with the new PostgreSQL-oriented tables. The backend now includes JWT/RBAC authentication, API key access, and production-oriented v2 engines (RTB, A/B testing, attribution, agent). All backend tests pass and the code quality pipeline (black/isort/flake8/mypy) is clean.
+> **Important current state:** The backend includes JWT/RBAC authentication, API key access, and production-oriented v2 engines (RTB, A/B testing, attribution, agent). Business pages also use dedicated `-sim` routers (`/api/v2/rtb/simulate`, `/api/v2/agent-sim`, `/api/v2/abtests-sim`) that expose the original interactive simulations under the v2 namespace. The Docker Compose stack now runs PostgreSQL, Redis, backend, and frontend services. Local development still defaults to SQLite. All backend tests pass and the code quality pipeline (black/isort/flake8/mypy) is clean.
 
 ## Tech Stack
 
@@ -15,8 +15,9 @@ The codebase is split into a Python/FastAPI backend (`backend/`) and a React/Typ
 - **Python 3.11+**
 - **FastAPI 0.111.1** + **Pydantic v2** + **pydantic-settings**
 - **SQLAlchemy 2.0 async** with `Mapped` / `mapped_column` style
-- **SQLite** via `aiosqlite` at runtime (Docker Compose, local dev, tests)
-- **Alembic** 1.13.2 is configured and an initial migration exists, but it is **not run on startup** (`Base.metadata.create_all()` is used instead)
+- **SQLite** via `aiosqlite` for local development and tests
+- **PostgreSQL** via `asyncpg` in the Docker Compose stack
+- **Alembic** 1.13.2 is configured; migrations run automatically in Docker (`USE_ALEMBIC=true`), while local SQLite mode still auto-creates tables via `Base.metadata.create_all()`
 - **SciPy**, **NumPy**, **pandas**, **statsmodels** for A/B test inference and attribution
 - **pytest** + **pytest-asyncio** + **httpx** + **pytest-cov**
 - Code quality tools in `pyproject.toml`: **black**, **isort**, **flake8**, **mypy**
@@ -40,7 +41,12 @@ Dependencies now used by application code:
 - **Lucide React** for icons
 - **clsx** + **tailwind-merge**
 
-No global state library is used. State is plain React local state (`useState`/`useEffect`/`useMemo`/`useRef`). There is no authentication layer.
+- **Zustand** for authentication state (with `persist` middleware)
+- **axios** for API calls via `src/lib/apiClient.ts` (auth header injection + 401 refresh retry)
+- **react-hot-toast** for notifications
+- **Playwright** for end-to-end tests (in `tests/e2e/`)
+
+State is mostly plain React local state; authentication is managed globally by `src/stores/authStore.ts`.
 
 ## Directory Structure
 
@@ -158,10 +164,22 @@ adpulse/
         │   ├── AttributionTraffic.tsx
         │   ├── Dashboard.tsx
         │   └── RTBEngine.tsx
+        ├── lib/
+        │   └── apiClient.ts       # Axios instance for /api/v2 with JWT refresh
+        ├── stores/
+        │   └── authStore.ts       # Zustand auth store
         └── utils/
-            ├── api.ts             # Fetch wrapper
+            ├── api.ts             # Envelope-unwrapping wrapper around apiClient
             ├── cn.ts              # tailwind-merge helper
             └── mockData.ts        # Fallback mock data
+```
+
+```
+frontend/
+├── playwright.config.ts         # Playwright e2e configuration
+└── tests/
+    └── e2e/
+        └── auth.spec.ts         # End-to-end auth flow test
 ```
 
 ## Quick Start
@@ -184,7 +202,7 @@ npm run dev
 
 Open `http://localhost:5173`.
 
-The Vite dev server proxies `/api` requests to `http://localhost:8000`.
+The Vite dev server proxies `/api` requests to `http://localhost:8000`. The frontend API client uses `VITE_API_URL=/api/v2` by default, so all requests are routed under `/api/v2/*`.
 
 ### Docker
 
@@ -193,9 +211,9 @@ docker-compose up --build
 ```
 
 - Backend: `http://localhost:8000`
-- Frontend: `http://localhost:5173`
+- Frontend: `http://localhost`
 
-The Docker Compose stack uses SQLite only and bind-mounts `./backend/adpulse.db` into the backend container.
+The Docker Compose stack now uses PostgreSQL (`postgres:15-alpine`) and Redis (`redis:7-alpine`). The backend runs Alembic migrations on startup and seeds data only when tables are empty.
 
 ## Build and Test Commands
 
@@ -212,7 +230,7 @@ pytest tests/ -v
 black app tests
 isort app tests
 flake8 app tests
-mypy app tests
+mypy app
 ```
 
 ### Frontend
@@ -230,8 +248,11 @@ npm run build
 # Preview production build
 npm run preview
 
-# Lint (note: eslint is referenced in package.json scripts but is not currently in devDependencies)
+# Lint
 npm run lint
+
+# End-to-end tests (requires Playwright browsers; set PLAYWRIGHT_BASE_URL to override http://localhost:5173)
+npm run test:e2e
 ```
 
 ## API Conventions
@@ -239,7 +260,9 @@ npm run lint
 - All API responses are wrapped as `{code, message, data}` by `app.core.response.WrappedAPIRouter`.
 - Exceptions are handled by `app.core.response.register_exception_handlers` and return the same envelope.
 - Business-domain routers live in `app/api/` and are registered in `app/main.py`. V2 routers are mounted under `/api/v2/*`.
-- Auth routes live in `app/api/auth.py`; protected endpoints use `get_current_active_user`, `require_permission`, or `validate_api_key`.
+- Dashboard and traffic routers are also mounted under `/api/v2/*` for consistency.
+- Simulation routers (`rtb_v2` `/simulate/*`, `agent_simulation`, `abtest_simulation`) expose the interactive, JWT-authenticated endpoints used by the frontend pages.
+- Auth routes live in `app/api/auth.py` under `/api/v2/auth/*`; protected endpoints use `get_current_active_user`, `require_permission`, or `validate_api_key`.
 - ORM primary keys use `uuid.UUID` with `default=uuid.uuid4`.
 - `datetime` fields use `datetime.utcnow`.
 - SQLAlchemy 2.0 style with `Mapped` / `mapped_column` type hints.
@@ -264,15 +287,15 @@ npm run lint
 ## Deployment
 
 - **CI/CD**: `.github/workflows/ci.yml` runs on pushes and pull requests to `main`. It installs Python dependencies and runs backend tests, then builds the frontend. It does not build or push Docker images and has no deploy stage.
-- **Backend image**: `backend/Dockerfile` builds a multi-stage `python:3.11-slim` image and runs `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
-- **Frontend image**: `frontend/Dockerfile` builds the Vite app with `node:20-alpine`, then serves `dist/` with `nginx:alpine` using `frontend/nginx.conf`.
-- **Nginx**: routes `/api` to `http://backend:8000` and falls back to `index.html` for the SPA.
-- **Database**: the Docker Compose stack uses SQLite only. PostgreSQL and Redis are referenced in dependencies and configuration but are not wired into the runtime services.
+- **Backend image**: `backend/Dockerfile` builds a multi-stage `python:3.11-slim` image, runs `alembic upgrade head`, and starts `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
+- **Frontend image**: `frontend/Dockerfile` builds the Vite app with `node:20-alpine` (default `VITE_API_URL=/api/v2`), then serves `dist/` with `nginx:alpine` using `frontend/nginx.conf`.
+- **Nginx**: routes `/api/v2` to `http://backend:8000` and falls back to `index.html` for the SPA.
+- **Database**: Docker Compose uses PostgreSQL with a persistent `pgdata` volume. Redis is available for caching/messaging. Local development still defaults to SQLite.
 
 ## Security Considerations
 
 - Authentication and authorization are now implemented via JWT access/refresh tokens, RBAC permissions, and API keys (`app/core/security.py`, `app/services/auth_service.py`, `app/api/auth.py`).
-- CORS origins are configurable via the `CORS_ORIGINS` environment variable. The default in `app/core/config.py` is a comma-separated allow-list; `docker-compose.yml` currently sets `CORS_ORIGINS=["*"]`.
+- CORS origins are configurable via the `CORS_ORIGINS` environment variable. `docker-compose.yml` sets `CORS_ORIGINS=http://localhost,http://localhost:5173`; do not use wildcards in production.
 - `SECRET_KEY` is used to sign JWTs; set a strong value in production.
 - Uploaded files are stored under `backend/uploads/`.
 - Treat `.env` values as sensitive and do not commit the file.
@@ -283,10 +306,8 @@ npm run lint
 
 2. **Runtime DB target.** `app/core/config.py` defaults to SQLite. PostgreSQL and Redis are wired in dependencies and configuration but are optional: Redis falls back to a no-op client and LLM calls fall back to deterministic output when no API key is configured.
 
-3. **Alembic is not invoked at startup.** `app/main.py` calls `Base.metadata.create_all()` in the lifespan, so migrations are bypassed. The existing migration targets PostgreSQL and will not work with SQLite.
+3. **Alembic in Docker, auto-create in SQLite.** `app/main.py` skips `create_all()` when `USE_ALEMBIC=true` (Docker Compose) and expects `alembic upgrade head` to have run. SQLite local mode still auto-creates tables.
 
-4. **Frontend `lint` script references missing package.** `eslint` is used in `package.json` scripts but is not listed in `devDependencies`.
-
-5. **Unused file.** `frontend/src/pages/Agent.tsx` exists but is not wired into `App.tsx`; `/agent` uses `AgentLoop.tsx`.
+4. **Unused file.** `frontend/src/pages/Agent.tsx` exists but is not wired into `App.tsx`; `/agent` uses `AgentLoop.tsx`.
 
 When modifying this project, keep the legacy/v2 model split in mind and decide whether the runtime target should remain SQLite or be migrated to PostgreSQL.

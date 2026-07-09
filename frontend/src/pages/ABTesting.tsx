@@ -20,7 +20,7 @@ function ABTesting() {
   const fetchTests = async () => {
     setLoadingList(true);
     try {
-      const data = await apiRequest<ABTest[]>('/abtests');
+      const data = await apiRequest<ABTest[]>('/abtests-sim');
       setTests(data);
       if (data.length > 0 && !selectedId) {
         setSelectedId(data[0].id);
@@ -36,8 +36,8 @@ function ABTesting() {
     setLoadingDetail(true);
     try {
       const [res, alert] = await Promise.all([
-        apiRequest<TestResults>(`/abtests/${id}/results`),
-        apiRequest<AnomalyAlert | null>(`/abtests/${id}/anomaly`).catch(() => null),
+        apiRequest<TestResults>(`/abtests-sim/${id}/results`),
+        apiRequest<AnomalyAlert | null>(`/abtests-sim/${id}/anomaly`).catch(() => null),
       ]);
       setResults(res);
       setAnomaly(alert);
@@ -59,7 +59,7 @@ function ABTesting() {
   const handleStart = async () => {
     if (!selectedId) return;
     try {
-      await apiRequest(`/abtests/${selectedId}/start`, { method: 'POST' });
+      await apiRequest(`/abtests-sim/${selectedId}/start`, { method: 'POST' });
       fetchTests();
       fetchDetail(selectedId);
     } catch (err) {
@@ -70,7 +70,7 @@ function ABTesting() {
   const handleStop = async () => {
     if (!selectedId) return;
     try {
-      await apiRequest(`/abtests/${selectedId}/stop`, { method: 'POST' });
+      await apiRequest(`/abtests-sim/${selectedId}/stop`, { method: 'POST' });
       fetchTests();
       fetchDetail(selectedId);
     } catch (err) {
@@ -81,7 +81,7 @@ function ABTesting() {
   const handleDelete = async () => {
     if (!selectedId || !confirm('确定删除该测试？')) return;
     try {
-      await apiRequest(`/abtests/${selectedId}`, { method: 'DELETE' });
+      await apiRequest(`/abtests-sim/${selectedId}`, { method: 'DELETE' });
       setSelectedId(null);
       fetchTests();
       setResults(null);

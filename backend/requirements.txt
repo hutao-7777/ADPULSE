@@ -47,3 +47,5 @@ black==24.4.2
 isort==5.13.2
 flake8==7.1.0
 mypy==1.10.1
+types-passlib==1.7.7.20260211
+types-python-jose==3.5.0.20260408

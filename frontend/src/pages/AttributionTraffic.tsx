@@ -36,46 +36,62 @@ function AttributionTraffic() {
   const initSampleJourney = async () => {
     setLoadingAttribution(true);
     try {
+      const conversionValue = 1000;
       const baseTime = new Date();
-      const touchpoints: { channel: string; event_type: string; offsetHours: number }[] = [
-        { channel: 'display_view', event_type: 'impression', offsetHours: -96 },
-        { channel: 'search', event_type: 'impression', offsetHours: -72 },
-        { channel: 'display_click', event_type: 'click', offsetHours: -48 },
-        { channel: 'social', event_type: 'click', offsetHours: -24 },
+      const touchpointInputs = [
+        { channel: 'display', event_type: 'impression', offsetHours: -96 },
+        { channel: 'search_ads', event_type: 'impression', offsetHours: -72 },
+        { channel: 'display', event_type: 'click', offsetHours: -48 },
+        { channel: 'social_media', event_type: 'click', offsetHours: -24 },
       ];
 
-      for (const tp of touchpoints) {
-        const eventTime = new Date(baseTime.getTime() + tp.offsetHours * 3600000).toISOString();
-        await apiRequest('/attribution/journey', {
+      const touchpoints = touchpointInputs.map((tp, idx) => ({
+        channel: tp.channel,
+        campaign_id: selectedCampaignId,
+        timestamp: new Date(baseTime.getTime() + tp.offsetHours * 3600000).toISOString(),
+        cost: 0,
+        metadata: { event_type: tp.event_type, seq: idx + 1 },
+      }));
+
+      const conversionTime = new Date(baseTime.getTime() + 3600000).toISOString();
+
+      const journey = await apiRequest<{ journey_id: string; touchpoints: { id: string; channel: string; timestamp: string; metadata: { seq?: number } }[] }>(
+        '/attribution/journeys',
+        {
           method: 'POST',
           body: JSON.stringify({
             user_id: userId,
-            campaign_id: selectedCampaignId,
-            channel: tp.channel,
-            event_type: tp.event_type,
-            event_time: eventTime,
+            touchpoints,
+            conversion: { timestamp: conversionTime, value: conversionValue, currency: 'USD' },
           }),
-        });
-      }
-
-      await apiRequest('/attribution/conversion', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: userId,
-          campaign_id: selectedCampaignId,
-          conversion_value: 1000,
-          channel: 'direct',
-        }),
-      });
-
-      const calc = await apiRequest<AttributionResult>(
-        `/attribution/calculate/${userId}/${selectedCampaignId}`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ conversion_value: 1000 }),
         }
       );
-      setAttribution(calc);
+
+      const calc = await apiRequest<{ journey_id: string; models: Record<string, Record<string, number>> }>(
+        `/attribution/journeys/${journey.journey_id}/compute`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ models: ['first_touch', 'last_touch', 'linear', 'time_decay', 'shapley'] }),
+        }
+      );
+
+      const journeySteps = journey.touchpoints
+        .sort((a, b) => (a.metadata.seq || 0) - (b.metadata.seq || 0))
+        .map((tp, idx) => ({
+          seq: idx + 1,
+          channel: tp.channel,
+          event_type: 'click',
+          event_time: tp.timestamp,
+          credits: calc.models['linear'],
+        }));
+
+      setAttribution({
+        journey: journeySteps,
+        conversion_value: conversionValue,
+        models: calc.models,
+        model_credits: calc.models,
+        summary: `Journey ${journey.journey_id} analyzed across ${Object.keys(calc.models).length} models.`,
+      });
     } catch (err) {
       console.error('归因分析失败:', err);
       alert('后端归因调用失败，已回退到模拟数据');

@@ -52,8 +52,8 @@ function AgentLoop() {
   const fetchStatusAndMemory = async (campaignId: string) => {
     try {
       const [s, m] = await Promise.all([
-        apiRequest<AgentStatus>(`/agent/${campaignId}/status`),
-        apiRequest<AgentMemoryResponse>(`/agent/${campaignId}/memory`),
+        apiRequest<AgentStatus>(`/agent-sim/${campaignId}/status`),
+        apiRequest<AgentMemoryResponse>(`/agent-sim/${campaignId}/memory`),
       ]);
       setStatus(s);
       setStrategy(s.strategy);
@@ -74,12 +74,12 @@ function AgentLoop() {
 
     const start = performance.now();
     try {
-      await apiRequest(`/agent/${selectedCampaign}/strategy`, {
+      await apiRequest(`/agent-sim/${selectedCampaign}/strategy`, {
         method: 'POST',
         body: JSON.stringify(strategy),
       });
 
-      const runRes = await apiRequest<AgentRunResponse>(`/agent/${selectedCampaign}/run`, {
+      const runRes = await apiRequest<AgentRunResponse>(`/agent-sim/${selectedCampaign}/run`, {
         method: 'POST',
         body: JSON.stringify({ max_iterations: loopCount }),
       });

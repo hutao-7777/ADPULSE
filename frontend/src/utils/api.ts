@@ -1,4 +1,4 @@
-const API_BASE = 'http://localhost:8000/api';
+import apiClient from '../lib/apiClient';
 
 interface ApiEnvelope<T> {
   code: number;
@@ -10,30 +10,21 @@ export async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = `${API_BASE}${endpoint}`;
+  const method = (options.method || 'GET').toUpperCase();
+  const body =
+    options.body && typeof options.body === 'string'
+      ? JSON.parse(options.body)
+      : options.body;
 
-  const config: RequestInit = {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-    ...options,
-  };
+  const response = await apiClient.request<ApiEnvelope<T>>({
+    url: endpoint,
+    method,
+    data: method === 'GET' ? undefined : body,
+    headers: options.headers as Record<string, string>,
+  });
 
-  if (config.body && typeof config.body !== 'string') {
-    config.body = JSON.stringify(config.body);
-  }
+  const payload = response.data;
 
-  const response = await fetch(url, config);
-
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    payload = null;
-  }
-
-  // Handle unified backend envelope { code, message, data }
   const isEnvelope =
     payload &&
     typeof payload === 'object' &&
@@ -42,20 +33,11 @@ export async function apiRequest<T>(
     'data' in payload;
 
   if (isEnvelope) {
-    const envelope = payload as ApiEnvelope<T>;
-    if (!response.ok || envelope.code !== 0) {
-      throw new Error(envelope.message || `HTTP ${response.status}`);
+    if (payload.code !== 0) {
+      throw new Error(payload.message || `API error ${payload.code}`);
     }
-    return envelope.data;
+    return payload.data;
   }
 
-  if (!response.ok) {
-    let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-    if (payload && typeof payload === 'object' && 'detail' in payload) {
-      errorMessage = String((payload as { detail: unknown }).detail);
-    }
-    throw new Error(errorMessage);
-  }
-
-  return payload as T;
+  return payload as unknown as T;
 }

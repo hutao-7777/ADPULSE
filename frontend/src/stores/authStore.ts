@@ -48,7 +48,7 @@ const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
 
       login: async (email, password) => {
-        const { data } = await apiClient.post('/api/auth/login', {
+        const { data } = await apiClient.post('/api/v2/auth/login', {
           email,
           password,
         });
@@ -62,7 +62,7 @@ const useAuthStore = create<AuthState>()(
       },
 
       register: async (email, password) => {
-        await apiClient.post('/api/auth/register', { email, password });
+        await apiClient.post('/api/v2/auth/register', { email, password });
         await get().login(email, password);
       },
 
@@ -83,7 +83,7 @@ const useAuthStore = create<AuthState>()(
           return null;
         }
         try {
-          const { data } = await apiClient.post('/api/auth/refresh', {
+          const { data } = await apiClient.post('/api/v2/auth/refresh', {
             refresh_token: currentRefresh,
           });
           const { access_token } = data.data;
@@ -96,17 +96,17 @@ const useAuthStore = create<AuthState>()(
       },
 
       fetchUser: async () => {
-        const { data } = await apiClient.get('/api/auth/me');
+        const { data } = await apiClient.get('/api/v2/auth/me');
         set({ user: data.data });
       },
 
       fetchApiKeys: async () => {
-        const { data } = await apiClient.get('/api/auth/api-keys');
+        const { data } = await apiClient.get('/api/v2/auth/api-keys');
         set({ apiKeys: data.data });
       },
 
       createApiKey: async (name: string) => {
-        const { data } = await apiClient.post('/api/auth/api-keys', {
+        const { data } = await apiClient.post('/api/v2/auth/api-keys', {
           name,
           scopes: ['rtb:write'],
         });
@@ -115,7 +115,7 @@ const useAuthStore = create<AuthState>()(
       },
 
       revokeApiKey: async (id: string) => {
-        await apiClient.delete(`/api/auth/api-keys/${id}`);
+        await apiClient.delete(`/api/v2/auth/api-keys/${id}`);
         await get().fetchApiKeys();
       },
     }),

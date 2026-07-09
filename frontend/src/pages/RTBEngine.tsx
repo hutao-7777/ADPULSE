@@ -735,7 +735,7 @@ function RTBEngine() {
         auction_type: form.auctionType,
       };
 
-      const result = await apiRequest<AuctionResult>('/rtb/auction/single', {
+      const result = await apiRequest<AuctionResult>('/rtb/simulate', {
         method: 'POST',
         body: JSON.stringify(payload),
       });
@@ -756,7 +756,7 @@ function RTBEngine() {
     setFlowStep(0);
 
     try {
-      const result = await apiRequest<BatchResponse>('/rtb/auction/batch', {
+      const result = await apiRequest<BatchResponse>('/rtb/simulate/batch', {
         method: 'POST',
         body: JSON.stringify({
           count: 100,

@@ -19,7 +19,7 @@ from app.schemas.traffic import (
 )
 from app.services.traffic_quality_engine import TrafficQualityEngine
 
-router = APIRouter(prefix="/api/traffic", tags=["traffic"])
+router = APIRouter(prefix="/api/v2/traffic", tags=["traffic"])
 
 _engine = TrafficQualityEngine()
 

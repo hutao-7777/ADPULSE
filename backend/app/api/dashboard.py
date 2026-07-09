@@ -12,7 +12,7 @@ from app.core.response import APIRouter
 from app.models.models import Auction
 from app.schemas.dashboard import RTBSummary, TrendPoint, WinRateTrend
 
-router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+router = APIRouter(prefix="/api/v2/dashboard", tags=["dashboard"])
 
 
 @router.get("/summary")

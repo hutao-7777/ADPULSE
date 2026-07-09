@@ -9,7 +9,9 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api import (
+    abtest_simulation,
     abtest_v2,
+    agent_simulation,
     agent_v2,
     attribution_v2,
     auth,
@@ -89,7 +91,9 @@ app.include_router(attribution_v2.router)
 app.include_router(traffic.router)
 app.include_router(rtb_v2.router)
 app.include_router(abtest_v2.router)
+app.include_router(abtest_simulation.router)
 app.include_router(dashboard.router)
+app.include_router(agent_simulation.router)
 app.include_router(agent_v2.router)
 
 
