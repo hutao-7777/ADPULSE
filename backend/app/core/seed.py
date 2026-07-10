@@ -467,14 +467,14 @@ async def _seed_ab_tests(session: AsyncSession) -> None:
 
     for exp in experiments:
         variant_result = await session.execute(
-            select(Variant).where(Variant.experiment_id == exp["id"])
+            select(Variant).where(Variant.experiment_id == cast(uuid.UUID, exp["id"]))
         )
         variants_list = list(variant_result.scalars().all())
         if not variants_list:
             continue
-        start = cast(datetime, exp["start_date"]).date()
+        start_date_value: date = cast(datetime, exp["start_date"]).date()
         await experiment_simulator.generate_history(
-            exp["id"], variants_list, start, session
+            cast(uuid.UUID, exp["id"]), variants_list, start_date_value, session
         )
 
 

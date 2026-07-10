@@ -243,7 +243,7 @@ class ExperimentMetric(Base):
     user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     metric_name: Mapped[str] = mapped_column(String(100), nullable=False)
     metric_value: Mapped[float] = mapped_column(Float, nullable=False)
-    event_time: Mapped[datetime] = mapped_column(
+    event_time: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=False), nullable=False
     )
     created_at: Mapped[datetime.datetime] = mapped_column(

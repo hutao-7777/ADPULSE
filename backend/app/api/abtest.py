@@ -146,9 +146,8 @@ async def create_experiment(
     result = await db.execute(stmt)
     variants_list = list(result.scalars().all())
 
-    start = experiment.start_date or utc_now()
-    if isinstance(start, datetime):
-        start = start.date()
+    start_dt = experiment.start_date or utc_now()
+    start = start_dt.date()
     await experiment_simulator.generate_history(experiment.id, variants_list, start, db)
 
     result = await db.execute(
@@ -345,8 +344,8 @@ async def analyze_experiment(
     )
     rows = list(d_result.scalars().all())
 
-    variant_summaries = []
-    control_summary = None
+    variant_summaries: list[dict[str, Any]] = []
+    control_summary: dict[str, Any] | None = None
     for v in variants:
         v_rows = [r for r in rows if r.variant_id == v.id]
         total_users = sum(r.users for r in v_rows)
