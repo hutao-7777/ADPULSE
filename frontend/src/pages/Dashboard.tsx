@@ -118,7 +118,7 @@ function KPICard({ data, loading }: KPICardProps) {
   if (loading) return <SkeletonCard />;
 
   return (
-    <div className="card p-5 flex flex-col justify-between min-h-[164px]">
+    <div className="card p-5 flex flex-col justify-between min-h-[130px] sm:min-h-[150px] md:min-h-[164px]">
       <div className="flex items-start justify-between">
         <div>
           <p className="text-muted text-sm">{data.label}</p>
@@ -402,8 +402,19 @@ function Dashboard() {
 
     fetchAll();
 
+    // Auto-refresh every 30 seconds
+    const interval = setInterval(fetchAll, 30000);
+
+    // Refresh immediately when tab becomes visible
+    const onVisible = () => {
+      if (!document.hidden) fetchAll();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
     return () => {
       cancelled = true;
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);
 

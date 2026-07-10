@@ -99,17 +99,18 @@ async def get_abtest_overview(
         control = analysis.get("control")
 
         if control is None:
-            # Experiment has no metric data yet; skip from overview.
-            continue
-
-        leading_variant = control.get("name", "-")
-        confidence = 0.0
-        best_lift = 0.0
-        for v in variants:
-            if v.get("relative_lift_pct", 0) > best_lift:
-                best_lift = v["relative_lift_pct"]
-                leading_variant = v.get("variant_name", leading_variant)
-                confidence = (1.0 - min(v.get("p_value_ttest", 1.0), 1.0)) * 100.0
+            # Experiment has no metric data yet; show placeholder
+            leading_variant = "数据收集中"
+            confidence = 0.0
+        else:
+            leading_variant = control.get("name", "-")
+            confidence = 0.0
+            best_lift = 0.0
+            for v in variants:
+                if v.get("relative_lift_pct", 0) > best_lift:
+                    best_lift = v["relative_lift_pct"]
+                    leading_variant = v.get("variant_name", leading_variant)
+                    confidence = (1.0 - min(v.get("p_value_ttest", 1.0), 1.0)) * 100.0
 
         variant_count = (
             await db.execute(

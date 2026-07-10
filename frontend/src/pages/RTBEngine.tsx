@@ -21,6 +21,7 @@ import {
 import { apiRequest } from '../utils/api';
 import DataSourceBadge from '../components/DataSourceBadge';
 import { cn } from '../utils/cn';
+import { useRTBStore } from '../stores/rtbStore';
 
 // ------------------------------------------------------------------
 // 类型定义
@@ -293,7 +294,7 @@ function FlowNode({
   return (
     <div
       className={cn(
-        'relative flex flex-col items-center justify-center w-28 h-28 rounded-2xl border-2 transition-all duration-500 z-10',
+        'relative flex flex-col items-center justify-center w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl border-2 transition-all duration-500 z-10',
         active
           ? 'bg-accent/15 border-accent shadow-[0_0_24px_rgba(59,130,246,0.35)]'
           : 'bg-secondary border-slate-700'
@@ -320,7 +321,7 @@ function Arrow({ visible, label, color = '#3B82F6', reverse = false }: {
       )}
       style={{ transform: reverse && !visible ? 'translateX(-8px)' : undefined }}
     >
-      <div className="relative flex items-center w-20 h-0.5" style={{ backgroundColor: color }}>
+      <div className="relative flex items-center w-12 sm:w-16 md:w-20 h-0.5" style={{ backgroundColor: color }}>
         <div
           className="absolute right-0 w-0 h-0 border-y-4 border-y-transparent"
           style={{
@@ -403,7 +404,7 @@ function AuctionFlowViz({ result, step }: AuctionFlowVizProps) {
         </div>
       </div>
 
-      <div className="relative flex items-center justify-between min-h-[340px] px-4">
+      <div className="relative flex items-center justify-between min-h-[260px] sm:min-h-[300px] md:min-h-[340px] px-2 md:px-4">
         {/* SSP */}
         <div className="flex flex-col items-center gap-4">
           <FlowNode icon={Server} label="SSP" sub="发布商" active={step >= 1 && step <= 5} />
@@ -447,7 +448,7 @@ function AuctionFlowViz({ result, step }: AuctionFlowVizProps) {
         </div>
 
         {/* DSPs */}
-        <div className="flex flex-col gap-3 w-40">
+        <div className="flex flex-col gap-3 w-32 sm:w-36 md:w-40">
           {sortedBids.map((bid) => (
             <BidCard
               key={bid.dsp}
@@ -533,7 +534,7 @@ function BatchResults({ result }: BatchResultsProps) {
   return (
     <div className="space-y-4">
       {/* 汇总卡片 */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {[
           { label: '总拍卖次数', value: stats.total_auctions },
           { label: '成交次数', value: stats.filled_auctions },
@@ -683,12 +684,16 @@ function RTBEngine() {
     adFormat: 'banner_300x250',
   });
 
+  const auctionResult = useRTBStore((s) => s.auctionResult);
+  const setAuctionResult = useRTBStore((s) => s.setAuctionResult);
+  const batchResult = useRTBStore((s) => s.batchResult);
+  const setBatchResult = useRTBStore((s) => s.setBatchResult);
+  const logs = useRTBStore((s) => s.logs);
+  const addLogToStore = useRTBStore((s) => s.addLog);
+  const auctionCounter = useRTBStore((s) => s.auctionCounter);
+
   const [loading, setLoading] = useState(false);
-  const [auctionResult, setAuctionResult] = useState<AuctionResult | null>(null);
   const [flowStep, setFlowStep] = useState(0);
-  const [batchResult, setBatchResult] = useState<BatchResponse | null>(null);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [auctionCounter, setAuctionCounter] = useState(0);
 
   // 动画推进
   useEffect(() => {
@@ -706,7 +711,6 @@ function RTBEngine() {
 
   const addLog = (result: AuctionResult) => {
     const nextCount = auctionCounter + 1;
-    setAuctionCounter(nextCount);
     const entry: LogEntry = {
       id: `${Date.now()}-${nextCount}`,
       time: nowTime(),
@@ -716,7 +720,7 @@ function RTBEngine() {
       price: result.winner ? formatCpm(result.winner.settlement_price) : '¥0.00',
       latency: result.latency_ms,
     };
-    setLogs((prev) => [...prev.slice(-49), entry]);
+    addLogToStore(entry);
   };
 
   const runSingleAuction = async () => {
