@@ -42,7 +42,11 @@ async def get_available_sources(
     sources = []
     for row in result.all():
         name = row[0]
-        label = {"mock": "Mock 数据", "ipinyou": "iPinYou 真实数据"}.get(name, name)
+        label = {
+            "mock": "Mock 数据",
+            "ipinyou": "iPinYou 真实数据",
+            "rtb_sim": "RTB 模拟数据",
+        }.get(name, name)
         sources.append({"name": name, "label": label, "record_count": row[1]})
     return {"sources": sources}
 

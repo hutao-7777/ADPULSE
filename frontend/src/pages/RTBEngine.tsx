@@ -723,7 +723,6 @@ function RTBEngine() {
     setLoading(true);
     setAuctionResult(null);
     setFlowStep(0);
-    setBatchResult(null);
 
     try {
       const payload = {
@@ -753,8 +752,7 @@ function RTBEngine() {
 
   const runBatchAuction = async () => {
     setLoading(true);
-    setAuctionResult(null);
-    setFlowStep(0);
+    setBatchResult(null);
 
     try {
       const result = await apiRequest<BatchResponse>('/rtb/simulate/batch', {
