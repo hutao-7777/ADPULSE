@@ -1,8 +1,9 @@
 """Traffic quality scoring and fraud detection engine."""
 
+import random
 import uuid
-from datetime import datetime, timedelta
-from typing import Dict, List
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,9 +78,12 @@ class TrafficQualityEngine:
                     break
 
         ip_distribution = raw_metrics.get("ip_distribution", {})
-        if clicks == 0:
+        if impressions > 0 and ip_distribution:
+            total_ip_hits = sum(ip_distribution.values())
             for ip, count in ip_distribution.items():
-                if count > 10:
+                share = count / total_ip_hits if total_ip_hits > 0 else 0.0
+                # A single IP contributing >40% of traffic is suspicious.
+                if share > 0.4 and count > 10:
                     flags.append("low_quality_ip")
                     break
 
@@ -226,6 +230,7 @@ class TrafficQualityEngine:
                         f"检测到流量异常标记: {flag}，"
                         f"质量分 {score.quality_score}，等级 {score.grade}。"
                     ),
+                    detected_at=utc_now(),
                 )
                 db.add(alert)
                 alerts.append(
@@ -246,6 +251,7 @@ class TrafficQualityEngine:
                 alert_type="overall_fraud_score",
                 severity="critical",
                 description=f"综合质量分低于50 ({scores[0].quality_score})，判定为作弊流量，建议立即过滤。",
+                detected_at=utc_now(),
             )
             db.add(alert)
             alerts.append(
@@ -292,3 +298,67 @@ class TrafficQualityEngine:
             }
             for score in result.scalars().all()
         ]
+
+
+def seed_traffic_metrics(
+    campaign_id: str | uuid.UUID,
+    days: int = 7,
+    anomaly_days: int = 2,
+    rng: Optional[random.Random] = None,
+) -> List[Dict]:
+    """Generate deterministic raw traffic metrics for seeding demo alerts.
+
+    Most days are healthy; a few recent days contain bot-like signals so that
+    the fraud alert API has real records to return.
+    """
+    if rng is None:
+        rng = random.Random(42)
+
+    metrics: List[Dict] = []
+    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    for day_offset in range(days):
+        day = end - timedelta(days=days - 1 - day_offset)
+        is_anomaly = day_offset >= days - anomaly_days
+
+        impressions = rng.randint(8000, 15000)
+        if is_anomaly:
+            # Bot-like traffic: high CTR, high CVR, concentrated IP, short dwell.
+            clicks = int(impressions * rng.uniform(0.25, 0.35))
+            conversions = int(clicks * rng.uniform(0.45, 0.65))
+            bounce_count = int(clicks * rng.uniform(0.75, 0.90))
+            total_dwell_sec = int(impressions * rng.uniform(1.0, 3.0))
+            interaction_events = int(impressions * rng.uniform(0.02, 0.05))
+            unique_users = max(1, int(impressions * rng.uniform(0.02, 0.05)))
+            ip_distribution = {"192.168.1.100": int(impressions * 0.55)}
+            click_timestamps = list(range(0, 240, 2))[:120]
+            night_ratio = 0.65
+        else:
+            clicks = int(impressions * rng.uniform(0.02, 0.04))
+            conversions = int(clicks * rng.uniform(0.05, 0.15))
+            bounce_count = int(clicks * rng.uniform(0.40, 0.60))
+            total_dwell_sec = int(impressions * rng.uniform(15.0, 35.0))
+            interaction_events = int(impressions * rng.uniform(0.20, 0.35))
+            unique_users = max(1, int(impressions * rng.uniform(0.30, 0.50)))
+            ip_distribution = {}
+            click_timestamps = []
+            night_ratio = 0.25
+
+        metrics.append(
+            {
+                "campaign_id": str(campaign_id),
+                "date": day,
+                "raw_metrics": {
+                    "impressions": impressions,
+                    "clicks": clicks,
+                    "conversions": conversions,
+                    "bounce_count": bounce_count,
+                    "total_dwell_sec": total_dwell_sec,
+                    "interaction_events": interaction_events,
+                    "unique_users": unique_users,
+                    "click_timestamps": click_timestamps,
+                    "ip_distribution": ip_distribution,
+                    "night_ratio": night_ratio,
+                },
+            }
+        )
+    return metrics

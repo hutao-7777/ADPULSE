@@ -1,5 +1,6 @@
 """AdPulse FastAPI application entrypoint."""
 
+import os
 from contextlib import asynccontextmanager
 from typing import cast
 
@@ -8,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api import abtest, agent, attribution, auth, dashboard, ipinyou, rtb, traffic
+from app.api import abtest, agent, attribution, auth, dashboard, rtb, traffic
 from app.core.config import settings
 from app.core.database import Base, engine
 from app.core.response import register_exception_handlers
@@ -49,15 +50,21 @@ async def lifespan(app: FastAPI):
     """Application lifespan: create tables, seed data when empty, cleanup."""
     _ensure_security_settings()
 
+    reset_on_start = os.environ.get("RESET_DB_ON_START", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-        if await _database_is_empty(conn):
+        if reset_on_start or await _database_is_empty(conn):
             async_session = async_sessionmaker(
                 engine, class_=AsyncSession, expire_on_commit=False
             )
             async with async_session() as session:
-                await seed_data(session)
+                await seed_data(session, reset=reset_on_start)
 
     yield
     await engine.dispose()
@@ -86,7 +93,6 @@ app.include_router(traffic.router)
 app.include_router(rtb.router)
 app.include_router(abtest.router)
 app.include_router(dashboard.router)
-app.include_router(ipinyou.router)
 app.include_router(agent.router)
 
 

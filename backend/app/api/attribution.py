@@ -2,9 +2,9 @@
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any, List
+from typing import Any, List, Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,6 +93,7 @@ class TouchpointResponse(BaseModel):
     cost: float
     metadata: dict
     touchpoint_seq: int
+    data_source: Optional[str] = None
 
 
 class ConversionResponse(BaseModel):
@@ -106,6 +107,7 @@ class JourneyResponse(BaseModel):
     user_id: str
     touchpoints: List[TouchpointResponse]
     conversion: ConversionResponse
+    data_source: Optional[str] = None
 
 
 class AttributionComputeRequest(BaseModel):
@@ -125,6 +127,7 @@ class AttributionComputeRequest(BaseModel):
 class AttributionComputeResponse(BaseModel):
     journey_id: str
     models: dict[str, dict[str, float]]
+    data_source: Optional[str] = None
 
 
 def _to_naive_utc(dt: datetime) -> datetime:
@@ -141,6 +144,7 @@ def _to_naive_utc(dt: datetime) -> datetime:
 )
 async def create_journey(
     request: JourneyCreateRequest,
+    data_source: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("campaign:write")),
 ) -> dict[str, Any]:
@@ -181,7 +185,9 @@ async def create_journey(
     )
     touchpoints = list(touchpoints_result.scalars().all())
 
-    return _journey_to_response(conversion, touchpoints)
+    response = _journey_to_response(conversion, touchpoints)
+    response["data_source"] = data_source
+    return response
 
 
 @router.post(
@@ -191,6 +197,7 @@ async def create_journey(
 async def compute_journey_attribution(
     journey_id: uuid.UUID,
     request: AttributionComputeRequest,
+    data_source: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("campaign:read")),
 ) -> dict[str, Any]:
@@ -223,12 +230,17 @@ async def compute_journey_attribution(
     )
     selected = {m: all_models[m] for m in request.models if m in all_models}
 
-    return {"journey_id": str(journey_id), "models": selected}
+    return {
+        "journey_id": str(journey_id),
+        "models": selected,
+        "data_source": data_source,
+    }
 
 
 @router.post("/calculate")
 async def calculate_attribution(
     request: AttributionRequest,
+    data_source: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("campaign:read")),
 ) -> dict[str, Any]:
@@ -238,18 +250,21 @@ async def calculate_attribution(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Conversion not found"
         )
-    return await engine.calculate_for_conversion(
+    result = await engine.calculate_for_conversion(
         db,
         request.conversion_id,
         request.click_window_days,
         request.view_window_days,
         request.n_samples,
     )
+    result["data_source"] = data_source
+    return result
 
 
 @router.post("/compare-models")
 async def compare_attribution_models(
     request: JourneyRequest,
+    data_source: Optional[str] = Query(None),
     click_window_days: int = 7,
     view_window_days: int = 1,
     db: AsyncSession = Depends(get_db),
@@ -271,6 +286,7 @@ async def compare_attribution_models(
         "user_id": request.user_id,
         "campaign_id": str(request.campaign_id),
         "models": comparison,
+        "data_source": data_source,
     }
 
 
@@ -289,6 +305,7 @@ def _journey_to_response(
                 "cost": tp.cost,
                 "metadata": tp.metadata_,
                 "touchpoint_seq": tp.touchpoint_seq,
+                "data_source": None,
             }
             for tp in touchpoints
         ],

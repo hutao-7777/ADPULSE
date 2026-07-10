@@ -50,12 +50,14 @@ class AuctionResult(BaseModel):
     reason: Optional[str] = None
     latency_ms: int
     timestamp: str
+    data_source: Optional[str] = None
 
 
 class BatchAuctionResponse(BaseModel):
     count: int
     results: List[AuctionResult]
     stats: dict
+    data_source: Optional[str] = None
 
 
 class DSPStatus(BaseModel):
@@ -65,6 +67,7 @@ class DSPStatus(BaseModel):
     max_cpm: float
     pacing_rate: float
     bidding_strategy: str
+    data_source: Optional[str] = None
 
 
 class DSPConfigUpdate(BaseModel):

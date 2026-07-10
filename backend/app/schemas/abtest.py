@@ -40,6 +40,7 @@ class ABTestResponse(BaseModel):
     end_date: Optional[datetime]
     winner: Optional[str]
     created_at: datetime
+    data_source: Optional[str] = None
 
 
 class ABTestDetailResponse(ABTestResponse):
@@ -56,6 +57,7 @@ class ABTestVariantResponse(BaseModel):
     impressions: int
     clicks: int
     revenue: float
+    data_source: Optional[str] = None
 
 
 class UserAssignRequest(BaseModel):
@@ -89,12 +91,14 @@ class VariantStats(BaseModel):
     sample_size_reached: bool
     confidence_interval: List[float]
     power: float
+    data_source: Optional[str] = None
 
 
 class ABTestResults(BaseModel):
     test_info: dict
     variants: List[VariantStats]
     recommendation: str
+    data_source: Optional[str] = None
 
 
 class AnomalyAlert(BaseModel):

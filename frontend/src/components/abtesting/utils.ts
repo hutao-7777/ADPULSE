@@ -43,3 +43,16 @@ export const MOCK_CAMPAIGNS: CampaignOption[] = [
   { id: '22345678-1234-1234-1234-123456789abc', name: '品牌认知推广' },
   { id: '32345678-1234-1234-1234-123456789abc', name: '新品首发' },
 ];
+
+export function safeDiv(numerator: number, denominator: number): number {
+  if (!denominator || denominator === 0) return 0;
+  return numerator / denominator;
+}
+
+export function formatCTR(clicks: number, impressions: number): string {
+  return `${(safeDiv(clicks, impressions) * 100).toFixed(2)}%`;
+}
+
+export function formatCVR(conversions: number, users: number): string {
+  return `${(safeDiv(conversions, users) * 100).toFixed(2)}%`;
+}

@@ -11,12 +11,12 @@ import hashlib
 import math
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy import stats
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Assignment, Experiment, ExperimentMetric, Variant
@@ -169,7 +169,87 @@ class ABTestEngine:
         experiment_id: uuid.UUID,
         metric_name: str,
     ) -> Dict[str, np.ndarray]:
-        """Return metric samples grouped by variant name."""
+        """Return metric samples grouped by variant name.
+
+        When the requested metric is a derived metric (ctr, conversion_rate, roi),
+        samples are reconstructed from the underlying exposure/click/conversion
+        events instead of requiring a separate metric recording step.
+        """
+        # Derived metrics: build samples from raw event records.
+        if metric_name in {"ctr", "conversion_rate", "roi"}:
+            result = await db.execute(
+                select(
+                    ExperimentMetric.variant_id,
+                    ExperimentMetric.metric_name,
+                    func.count(ExperimentMetric.id).label("cnt"),
+                    func.sum(ExperimentMetric.metric_value).label("total_value"),
+                )
+                .where(ExperimentMetric.experiment_id == experiment_id)
+                .where(
+                    ExperimentMetric.metric_name.in_(
+                        ["exposure", "click", "conversion"]
+                    )
+                )
+                .group_by(ExperimentMetric.variant_id, ExperimentMetric.metric_name)
+            )
+
+            variant_map: Dict[uuid.UUID, str] = {}
+            rows = result.all()
+            variant_ids = {row.variant_id for row in rows}
+            for vid in variant_ids:
+                variant = await db.get(Variant, vid)
+                if variant:
+                    variant_map[vid] = variant.name
+
+            aggregates: Dict[str, Dict[str, float]] = {}
+            for row in rows:
+                name = variant_map.get(row.variant_id)
+                if name is None:
+                    continue
+                agg = aggregates.setdefault(
+                    name,
+                    {
+                        "impressions": 0.0,
+                        "clicks": 0.0,
+                        "conversions": 0.0,
+                        "revenue": 0.0,
+                    },
+                )
+                metric = row.metric_name
+                cnt = float(row.cnt or 0)
+                total_value = float(row.total_value or 0.0)
+                if metric == "exposure":
+                    agg["impressions"] += cnt
+                elif metric == "click":
+                    agg["clicks"] += cnt
+                elif metric == "conversion":
+                    agg["conversions"] += cnt
+                    agg["revenue"] += total_value
+
+            samples: Dict[str, List[float]] = {}
+            for name, agg in aggregates.items():
+                impressions = agg["impressions"]
+                clicks = agg["clicks"]
+                conversions = agg["conversions"]
+                revenue = agg["revenue"] or (conversions * 80.0)
+                if metric_name == "ctr":
+                    # Per-exposure binary outcome.
+                    values = [1.0] * int(clicks) + [0.0] * int(impressions - clicks)
+                elif metric_name == "conversion_rate":
+                    values = [1.0] * int(conversions) + [0.0] * int(
+                        clicks - conversions
+                    )
+                else:  # roi
+                    spend = impressions * 0.005
+                    roi = revenue / spend if spend > 0 else 0.0
+                    values = [roi] * int(impressions)
+                if values:
+                    samples[name] = values
+            return {
+                name: np.array(values, dtype=float) for name, values in samples.items()
+            }
+
+        # Direct metric lookup.
         result = await db.execute(
             select(ExperimentMetric)
             .where(ExperimentMetric.experiment_id == experiment_id)
@@ -177,7 +257,7 @@ class ABTestEngine:
         )
         metrics = result.scalars().all()
 
-        samples: Dict[str, List[float]] = {}
+        samples = {}
         for m in metrics:
             variant = await db.get(Variant, m.variant_id)
             if variant is None:
@@ -185,6 +265,139 @@ class ABTestEngine:
             samples.setdefault(variant.name, []).append(m.metric_value)
 
         return {name: np.array(values, dtype=float) for name, values in samples.items()}
+
+    async def _fetch_variant_aggregates(
+        self,
+        db: AsyncSession,
+        experiment_id: uuid.UUID,
+    ) -> Dict[str, Dict[str, float]]:
+        """Return aggregate counts per variant: impressions, clicks, conversions and revenue."""  # noqa: E501
+        result = await db.execute(
+            select(
+                ExperimentMetric.variant_id,
+                ExperimentMetric.metric_name,
+                func.count(ExperimentMetric.id).label("cnt"),
+                func.sum(ExperimentMetric.metric_value).label("total_value"),
+            )
+            .where(ExperimentMetric.experiment_id == experiment_id)
+            .group_by(ExperimentMetric.variant_id, ExperimentMetric.metric_name)
+        )
+
+        variant_map: Dict[uuid.UUID, str] = {}
+        rows = result.all()
+        variant_ids = {row.variant_id for row in rows}
+        for vid in variant_ids:
+            variant = await db.get(Variant, vid)
+            if variant:
+                variant_map[vid] = variant.name
+
+        aggregates: Dict[str, Dict[str, float]] = {}
+        for row in rows:
+            name = variant_map.get(row.variant_id)
+            if name is None:
+                continue
+            agg = aggregates.setdefault(
+                name,
+                {
+                    "impressions": 0.0,
+                    "clicks": 0.0,
+                    "conversions": 0.0,
+                    "revenue": 0.0,
+                },
+            )
+            metric = row.metric_name
+            cnt = float(row.cnt or 0)
+            total_value = float(row.total_value or 0.0)
+            if metric == "exposure":
+                agg["impressions"] += cnt
+            elif metric == "click":
+                agg["clicks"] += cnt
+            elif metric == "conversion":
+                agg["conversions"] += cnt
+                agg["revenue"] += total_value
+
+        # Estimate revenue when conversion events did not carry a value.
+        for name, agg in aggregates.items():
+            if agg["conversions"] > 0 and agg["revenue"] == 0:
+                agg["revenue"] = agg["conversions"] * 80.0
+
+        return aggregates
+
+    async def get_daily_trend(
+        self,
+        db: AsyncSession,
+        experiment_id: uuid.UUID,
+        days: int = 14,
+    ) -> Dict[str, Any]:
+        """Return per-variant daily aggregates for the trend chart."""
+        experiment = await db.get(Experiment, experiment_id)
+        if experiment is None:
+            raise ValueError("Experiment not found")
+
+        end = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        start = end - timedelta(days=days - 1)
+
+        result = await db.execute(
+            select(
+                func.strftime("%Y-%m-%d", ExperimentMetric.event_time).label("day"),
+                ExperimentMetric.variant_id,
+                ExperimentMetric.metric_name,
+                func.count(ExperimentMetric.id).label("cnt"),
+                func.sum(ExperimentMetric.metric_value).label("total_value"),
+            )
+            .where(ExperimentMetric.experiment_id == experiment_id)
+            .where(ExperimentMetric.event_time >= start)
+            .where(ExperimentMetric.event_time < end + timedelta(days=1))
+            .group_by("day", ExperimentMetric.variant_id, ExperimentMetric.metric_name)
+        )
+
+        variant_map: Dict[uuid.UUID, str] = {}
+        rows = result.all()
+        variant_ids = {row.variant_id for row in rows}
+        for vid in variant_ids:
+            variant = await db.get(Variant, vid)
+            if variant:
+                variant_map[vid] = variant.name
+
+        daily: Dict[str, Dict[str, Dict[str, float]]] = {}
+        labels = [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
+        for label in labels:
+            daily[label] = {}
+
+        for row in rows:
+            name = variant_map.get(row.variant_id)
+            if name is None:
+                continue
+            day = row.day
+            metric = row.metric_name
+            cnt = float(row.cnt or 0)
+            total_value = float(row.total_value or 0.0)
+            variant_day = daily[day].setdefault(
+                name,
+                {"impressions": 0.0, "clicks": 0.0, "conversions": 0.0, "revenue": 0.0},
+            )
+            if metric == "exposure":
+                variant_day["impressions"] += cnt
+            elif metric == "click":
+                variant_day["clicks"] += cnt
+            elif metric == "conversion":
+                variant_day["conversions"] += cnt
+                variant_day["revenue"] += total_value
+
+        for day_data in daily.values():
+            for name, agg in day_data.items():
+                if agg["conversions"] > 0 and agg["revenue"] == 0:
+                    agg["revenue"] = agg["conversions"] * 80.0
+
+        return {
+            "experiment_id": str(experiment_id),
+            "metric": experiment.metric_name,
+            "days": days,
+            "labels": labels,
+            "daily": daily,
+        }
 
     def _variant_stats(self, samples: np.ndarray) -> VariantStats:
         """Compute descriptive statistics for a sample array."""
@@ -301,6 +514,7 @@ class ABTestEngine:
 
         metric = metric_name or experiment.metric_name
         samples = await self._fetch_variant_samples(db, experiment_id, metric)
+        aggregates = await self._fetch_variant_aggregates(db, experiment_id)
 
         if not samples:
             return {
@@ -321,8 +535,26 @@ class ABTestEngine:
 
         control_samples = samples[control_name]
         control_stats = self._variant_stats(control_samples)
+        control_agg = aggregates.get(control_name, {})
+
+        def _build_agg(agg: Dict[str, float]) -> Dict[str, float]:
+            impressions = max(agg.get("impressions", 0.0), 0.0)
+            clicks = max(agg.get("clicks", 0.0), 0.0)
+            conversions = max(agg.get("conversions", 0.0), 0.0)
+            revenue = max(agg.get("revenue", 0.0), 0.0)
+            spend_estimate = impressions * 0.005
+            return {
+                "impressions": impressions,
+                "clicks": clicks,
+                "conversions": conversions,
+                "revenue": revenue,
+                "ctr": clicks / impressions if impressions > 0 else 0.0,
+                "conversion_rate": conversions / clicks if clicks > 0 else 0.0,
+                "roi": revenue / spend_estimate if spend_estimate > 0 else 0.0,
+            }
 
         comparisons: List[VariantComparison] = []
+        comparison_aggregates: Dict[str, Dict[str, float]] = {}
         for variant_name, variant_samples in samples.items():
             if variant_name == control_name:
                 continue
@@ -360,6 +592,9 @@ class ABTestEngine:
                     is_significant=p_ttest < 0.05,
                 )
             )
+            comparison_aggregates[variant_name] = _build_agg(
+                aggregates.get(variant_name, {})
+            )
 
         return {
             "experiment_id": str(experiment_id),
@@ -369,6 +604,10 @@ class ABTestEngine:
                 "n": control_stats.n,
                 "mean": control_stats.mean,
                 "std": control_stats.std,
+                **_build_agg(control_agg),
             },
-            "comparisons": [c.__dict__ for c in comparisons],
+            "comparisons": [
+                {**c.__dict__, **_build_agg(aggregates.get(c.variant_name, {}))}
+                for c in comparisons
+            ],
         }

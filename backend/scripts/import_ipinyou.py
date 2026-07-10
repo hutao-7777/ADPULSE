@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import iPinYou RTB dataset into AdPulse SQLite database.
+"""Import iPinYou RTB dataset into AdPulse unified record tables.
 
 Supports two layouts:
 
@@ -11,7 +11,6 @@ Supports two layouts:
 
 import argparse
 import sys
-import uuid
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -25,12 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tqdm import tqdm
 
 from app.core.database import AsyncSessionLocal, Base, engine  # noqa: E402
-from app.models.ipinyou import (  # noqa: E402
-    IpinyouBid,
-    IpinyouClick,
-    IpinyouConv,
-    IpinyouDailyStat,
-    IpinyouImp,
+from app.models import (  # noqa: E402
+    BidRecord,
+    ClickRecord,
+    ConvRecord,
+    DailyStat,
+    ImpRecord,
 )
 
 # ---------------------------------------------------------------------------
@@ -62,7 +61,6 @@ RAW_COLUMNS = 22
 
 # ---------------------------------------------------------------------------
 # Formalized layout indices (train.log.txt / test.log.txt from make-ipinyou-data)
-# Columns: click, weekday, hour, <original schema>
 # ---------------------------------------------------------------------------
 FORM_IDX_CLICK = 0
 FORM_IDX_BID_ID = 3
@@ -155,24 +153,14 @@ def read_tsv_rows(
 # ---------------------------------------------------------------------------
 def build_raw_common_fields(parts: List[str]) -> Dict[str, Any]:
     return {
-        "ipinyou_id": parse_optional_str(parts[RAW_IDX_IPINYOU_ID]),
-        "user_agent": parse_optional_str(parts[RAW_IDX_USER_AGENT]),
-        "ip": parse_optional_str(parts[RAW_IDX_IP]),
-        "region": parse_optional_int(parts[RAW_IDX_REGION]),
-        "city": parse_optional_int(parts[RAW_IDX_CITY]),
-        "ad_exchange": parse_optional_int(parts[RAW_IDX_AD_EXCHANGE]),
-        "domain": parse_optional_str(parts[RAW_IDX_DOMAIN]),
-        "url": parse_optional_str(parts[RAW_IDX_URL]),
-        "anonymous_url_id": parse_optional_str(parts[RAW_IDX_ANON_URL_ID]),
-        "ad_slot_id": parse_optional_str(parts[RAW_IDX_AD_SLOT_ID]),
-        "ad_slot_width": parse_optional_int(parts[RAW_IDX_AD_SLOT_WIDTH]),
-        "ad_slot_height": parse_optional_int(parts[RAW_IDX_AD_SLOT_HEIGHT]),
-        "ad_slot_visibility": parse_optional_str(parts[RAW_IDX_AD_SLOT_VISIBILITY]),
-        "ad_slot_format": parse_optional_str(parts[RAW_IDX_AD_SLOT_FORMAT]),
-        "creative_id": parse_optional_str(parts[RAW_IDX_CREATIVE_ID]),
-        "landing_page_url": parse_optional_str(parts[RAW_IDX_LANDING_PAGE]),
         "advertiser_id": parse_optional_str(parts[RAW_IDX_ADVERTISER_ID]),
-        "user_tags": parse_optional_str(parts[RAW_IDX_USER_TAGS]),
+        "ad_slot": parse_optional_str(parts[RAW_IDX_AD_SLOT_ID]),
+        "url": parse_optional_str(parts[RAW_IDX_URL]),
+        "ipinyou_campaign_id": parse_optional_str(parts[RAW_IDX_ADVERTISER_ID]),
+        "ipinyou_creative_id": parse_optional_str(parts[RAW_IDX_CREATIVE_ID]),
+        "ipinyou_region_id": parse_optional_str(parts[RAW_IDX_REGION]),
+        "ipinyou_city_id": parse_optional_str(parts[RAW_IDX_CITY]),
+        "user_id": parse_optional_str(parts[RAW_IDX_IPINYOU_ID]),
     }
 
 
@@ -180,14 +168,12 @@ def build_raw_bid_row(parts: List[str]) -> Dict[str, Any]:
     fields = build_raw_common_fields(parts)
     fields.update(
         {
-            "id": uuid.uuid4(),
+            "data_source": "ipinyou",
             "bid_id": parts[RAW_IDX_BID_ID].strip(),
             "timestamp": parse_timestamp(parts[RAW_IDX_TIMESTAMP]),
-            "bidding_price": parse_price(parts[RAW_IDX_BIDDING_PRICE]),
-            "paying_price": parse_price(parts[RAW_IDX_PAYING_PRICE]),
+            "bid_price": parse_price(parts[RAW_IDX_BIDDING_PRICE]),
+            "pay_price": parse_price(parts[RAW_IDX_PAYING_PRICE]),
             "is_win": False,
-            "is_clicked": False,
-            "is_converted": False,
         }
     )
     return fields
@@ -197,11 +183,10 @@ def build_raw_imp_row(parts: List[str]) -> Dict[str, Any]:
     fields = build_raw_common_fields(parts)
     fields.update(
         {
-            "id": uuid.uuid4(),
+            "data_source": "ipinyou",
             "bid_id": parts[RAW_IDX_BID_ID].strip(),
             "timestamp": parse_timestamp(parts[RAW_IDX_TIMESTAMP]),
-            "bid_price": parse_price(parts[RAW_IDX_BIDDING_PRICE]),
-            "paying_price": parse_price(parts[RAW_IDX_PAYING_PRICE]),
+            "pay_price": parse_price(parts[RAW_IDX_PAYING_PRICE]),
         }
     )
     return fields
@@ -211,11 +196,10 @@ def build_raw_click_row(parts: List[str]) -> Dict[str, Any]:
     fields = build_raw_common_fields(parts)
     fields.update(
         {
-            "id": uuid.uuid4(),
+            "data_source": "ipinyou",
+            "click_id": parts[RAW_IDX_BID_ID].strip(),
             "bid_id": parts[RAW_IDX_BID_ID].strip(),
             "timestamp": parse_timestamp(parts[RAW_IDX_TIMESTAMP]),
-            "bidding_price": parse_price(parts[RAW_IDX_BIDDING_PRICE]),
-            "paying_price": parse_price(parts[RAW_IDX_PAYING_PRICE]),
         }
     )
     return fields
@@ -225,11 +209,11 @@ def build_raw_conv_row(parts: List[str]) -> Dict[str, Any]:
     fields = build_raw_common_fields(parts)
     fields.update(
         {
-            "id": uuid.uuid4(),
+            "data_source": "ipinyou",
+            "conv_id": parts[RAW_IDX_BID_ID].strip(),
+            "click_id": parts[RAW_IDX_BID_ID].strip(),
             "bid_id": parts[RAW_IDX_BID_ID].strip(),
             "timestamp": parse_timestamp(parts[RAW_IDX_TIMESTAMP]),
-            "bidding_price": parse_price(parts[RAW_IDX_BIDDING_PRICE]),
-            "paying_price": parse_price(parts[RAW_IDX_PAYING_PRICE]),
         }
     )
     return fields
@@ -240,24 +224,14 @@ def build_raw_conv_row(parts: List[str]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 def build_form_common_fields(parts: List[str]) -> Dict[str, Any]:
     return {
-        "ipinyou_id": parse_optional_str(parts[FORM_IDX_IPINYOU_ID]),
-        "user_agent": parse_optional_str(parts[FORM_IDX_USER_AGENT]),
-        "ip": parse_optional_str(parts[FORM_IDX_IP]),
-        "region": parse_optional_int(parts[FORM_IDX_REGION]),
-        "city": parse_optional_int(parts[FORM_IDX_CITY]),
-        "ad_exchange": parse_optional_int(parts[FORM_IDX_AD_EXCHANGE]),
-        "domain": parse_optional_str(parts[FORM_IDX_DOMAIN]),
-        "url": parse_optional_str(parts[FORM_IDX_URL]),
-        "anonymous_url_id": parse_optional_str(parts[FORM_IDX_URL_ID]),
-        "ad_slot_id": parse_optional_str(parts[FORM_IDX_AD_SLOT_ID]),
-        "ad_slot_width": parse_optional_int(parts[FORM_IDX_AD_SLOT_WIDTH]),
-        "ad_slot_height": parse_optional_int(parts[FORM_IDX_AD_SLOT_HEIGHT]),
-        "ad_slot_visibility": parse_optional_str(parts[FORM_IDX_AD_SLOT_VISIBILITY]),
-        "ad_slot_format": parse_optional_str(parts[FORM_IDX_AD_SLOT_FORMAT]),
-        "creative_id": parse_optional_str(parts[FORM_IDX_CREATIVE_ID]),
-        "landing_page_url": parse_optional_str(parts[FORM_IDX_KEY_PAGE]),
         "advertiser_id": parse_optional_str(parts[FORM_IDX_ADVERTISER_ID]),
-        "user_tags": parse_optional_str(parts[FORM_IDX_USER_TAGS]),
+        "ad_slot": parse_optional_str(parts[FORM_IDX_AD_SLOT_ID]),
+        "url": parse_optional_str(parts[FORM_IDX_URL]),
+        "ipinyou_campaign_id": parse_optional_str(parts[FORM_IDX_ADVERTISER_ID]),
+        "ipinyou_creative_id": parse_optional_str(parts[FORM_IDX_CREATIVE_ID]),
+        "ipinyou_region_id": parse_optional_str(parts[FORM_IDX_REGION]),
+        "ipinyou_city_id": parse_optional_str(parts[FORM_IDX_CITY]),
+        "user_id": parse_optional_str(parts[FORM_IDX_IPINYOU_ID]),
     }
 
 
@@ -266,14 +240,12 @@ def build_form_bid_row(parts: List[str]) -> Dict[str, Any]:
     fields = build_form_common_fields(parts)
     fields.update(
         {
-            "id": uuid.uuid4(),
+            "data_source": "ipinyou",
             "bid_id": parts[FORM_IDX_BID_ID].strip(),
             "timestamp": parse_timestamp(parts[FORM_IDX_TIMESTAMP]),
-            "bidding_price": parse_price(parts[FORM_IDX_BID_PRICE]),
-            "paying_price": parse_price(parts[FORM_IDX_PAY_PRICE]),
+            "bid_price": parse_price(parts[FORM_IDX_BID_PRICE]),
+            "pay_price": parse_price(parts[FORM_IDX_PAY_PRICE]),
             "is_win": True,
-            "is_clicked": parts[FORM_IDX_CLICK].strip() == "1",
-            "is_converted": False,
         }
     )
     return fields
@@ -283,11 +255,10 @@ def build_form_imp_row(parts: List[str]) -> Dict[str, Any]:
     fields = build_form_common_fields(parts)
     fields.update(
         {
-            "id": uuid.uuid4(),
+            "data_source": "ipinyou",
             "bid_id": parts[FORM_IDX_BID_ID].strip(),
             "timestamp": parse_timestamp(parts[FORM_IDX_TIMESTAMP]),
-            "bid_price": parse_price(parts[FORM_IDX_BID_PRICE]),
-            "paying_price": parse_price(parts[FORM_IDX_PAY_PRICE]),
+            "pay_price": parse_price(parts[FORM_IDX_PAY_PRICE]),
         }
     )
     return fields
@@ -297,11 +268,10 @@ def build_form_click_row(parts: List[str]) -> Dict[str, Any]:
     fields = build_form_common_fields(parts)
     fields.update(
         {
-            "id": uuid.uuid4(),
+            "data_source": "ipinyou",
+            "click_id": parts[FORM_IDX_BID_ID].strip(),
             "bid_id": parts[FORM_IDX_BID_ID].strip(),
             "timestamp": parse_timestamp(parts[FORM_IDX_TIMESTAMP]),
-            "bidding_price": parse_price(parts[FORM_IDX_BID_PRICE]),
-            "paying_price": parse_price(parts[FORM_IDX_PAY_PRICE]),
         }
     )
     return fields
@@ -312,44 +282,58 @@ def build_form_click_row(parts: List[str]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 def compute_daily_stats(bid_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Aggregate daily statistics from bid rows."""
-    stats: Dict[Tuple[date, Optional[str]], Dict[str, Any]] = defaultdict(
+    stats: Dict[Tuple[date, str], Dict[str, Any]] = defaultdict(
         lambda: {
-            "impressions": 0,
-            "clicks": 0,
-            "conversions": 0,
-            "total_cost": 0.0,
+            "total_bids": 0,
+            "total_imps": 0,
+            "total_clicks": 0,
+            "total_convs": 0,
+            "total_spend": 0.0,
+            "bid_prices": [],
         }
     )
 
     for row in bid_rows:
         dt: datetime = row["timestamp"]
         day = dt.date()
-        advertiser = row.get("advertiser_id")
-        key = (day, advertiser)
+        source = row["data_source"]
+        key = (day, source)
 
+        stats[key]["total_bids"] += 1
+        stats[key]["bid_prices"].append(row["bid_price"])
         if row.get("is_win"):
-            stats[key]["impressions"] += 1
-            stats[key]["total_cost"] += row.get("paying_price", 0.0)
+            stats[key]["total_imps"] += 1
+            stats[key]["total_spend"] += row.get("pay_price", 0.0) or 0.0
         if row.get("is_clicked"):
-            stats[key]["clicks"] += 1
+            stats[key]["total_clicks"] += 1
         if row.get("is_converted"):
-            stats[key]["conversions"] += 1
+            stats[key]["total_convs"] += 1
 
     result = []
-    for (day, advertiser), agg in stats.items():
-        impressions = agg["impressions"]
-        clicks = agg["clicks"]
-        avg_ctr = clicks / impressions if impressions else 0.0
+    for (day, source), agg in stats.items():
+        bids = agg["total_bids"]
+        imps = agg["total_imps"]
+        clicks = agg["total_clicks"]
+        convs = agg["total_convs"]
+        avg_bid_price = (
+            sum(agg["bid_prices"]) / len(agg["bid_prices"])
+            if agg["bid_prices"]
+            else None
+        )
+        avg_ctr = clicks / imps if imps else None
+        avg_cvr = convs / clicks if clicks else None
         result.append(
             {
-                "id": uuid.uuid4(),
+                "data_source": source,
                 "date": day,
-                "advertiser_id": advertiser,
-                "impressions": impressions,
-                "clicks": clicks,
-                "conversions": agg["conversions"],
-                "total_cost": round(agg["total_cost"], 6),
-                "avg_ctr": round(avg_ctr, 6),
+                "total_bids": bids,
+                "total_imps": imps,
+                "total_clicks": clicks,
+                "total_convs": convs,
+                "total_spend": round(agg["total_spend"], 6),
+                "avg_bid_price": round(avg_bid_price, 6) if avg_bid_price else None,
+                "avg_ctr": round(avg_ctr, 6) if avg_ctr else None,
+                "avg_cvr": round(avg_cvr, 6) if avg_cvr else None,
             }
         )
     return result
@@ -443,13 +427,11 @@ async def import_raw_format(
     async with AsyncSessionLocal() as session:
         async with session.begin():
             counts = {
-                "bids": await bulk_insert(session, IpinyouBid, bid_rows),
-                "impressions": await bulk_insert(session, IpinyouImp, imp_rows),
-                "clicks": await bulk_insert(session, IpinyouClick, click_rows),
-                "conversions": await bulk_insert(session, IpinyouConv, conv_rows),
-                "daily_stats": await bulk_insert(
-                    session, IpinyouDailyStat, daily_stat_rows
-                ),
+                "bids": await bulk_insert(session, BidRecord, bid_rows),
+                "impressions": await bulk_insert(session, ImpRecord, imp_rows),
+                "clicks": await bulk_insert(session, ClickRecord, click_rows),
+                "conversions": await bulk_insert(session, ConvRecord, conv_rows),
+                "daily_stats": await bulk_insert(session, DailyStat, daily_stat_rows),
             }
         await session.commit()
 
@@ -496,18 +478,20 @@ async def import_formalized_format(
             c for c in click_rows if c["bid_id"] in {r["bid_id"] for r in bid_rows}
         ]
 
+    for row in bid_rows:
+        row["is_clicked"] = row["bid_id"] in {c["bid_id"] for c in click_rows}
+        row["is_converted"] = False
+
     daily_stat_rows = compute_daily_stats(bid_rows)
 
     async with AsyncSessionLocal() as session:
         async with session.begin():
             counts = {
-                "bids": await bulk_insert(session, IpinyouBid, bid_rows),
-                "impressions": await bulk_insert(session, IpinyouImp, imp_rows),
-                "clicks": await bulk_insert(session, IpinyouClick, click_rows),
+                "bids": await bulk_insert(session, BidRecord, bid_rows),
+                "impressions": await bulk_insert(session, ImpRecord, imp_rows),
+                "clicks": await bulk_insert(session, ClickRecord, click_rows),
                 "conversions": 0,
-                "daily_stats": await bulk_insert(
-                    session, IpinyouDailyStat, daily_stat_rows
-                ),
+                "daily_stats": await bulk_insert(session, DailyStat, daily_stat_rows),
             }
         await session.commit()
 

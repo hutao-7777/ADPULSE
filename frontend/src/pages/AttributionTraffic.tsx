@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Activity, RefreshCw, TrendingUp, User } from 'lucide-react';
 
 import { apiRequest } from '../utils/api';
+import DataSourceBadge from '../components/DataSourceBadge';
 import { mockAttribution, mockFraudAlerts, mockTrafficQuality } from '../utils/mockData';
 import AttributionPanel from '../components/attribution-traffic/AttributionPanel';
 import TrafficPanel from '../components/attribution-traffic/TrafficPanel';
@@ -11,6 +12,21 @@ import type {
   FraudAlert,
   TrafficQuality,
 } from '../components/attribution-traffic/types';
+
+function emptyTrafficQuality(): TrafficQuality {
+  return {
+    quality_score: 0,
+    grade: 'standard',
+    ctr_score: 0,
+    cvr_score: 0,
+    bounce_score: 0,
+    dwell_score: 0,
+    interaction_score: 0,
+    flags: [],
+    anomaly_count: 0,
+    metrics: {},
+  };
+}
 
 function AttributionTraffic() {
   const [selectedCampaignId, setSelectedCampaignId] = useState(CAMPAIGNS[0].id);
@@ -24,13 +40,30 @@ function AttributionTraffic() {
 
   useEffect(() => {
     loadMockData();
-  }, []);
+    loadTrafficData();
+  }, [selectedCampaignId]);
 
   const loadMockData = () => {
     setAttribution(mockAttribution as AttributionResult);
     setActiveModel('first_touch');
-    setQuality(mockTrafficQuality as TrafficQuality);
-    setAlerts(mockFraudAlerts as FraudAlert[]);
+  };
+
+  const loadTrafficData = async () => {
+    setLoadingTraffic(true);
+    try {
+      const [scoreData, alertsData] = await Promise.all([
+        apiRequest<TrafficQuality>(`/traffic/quality/${selectedCampaignId}`).catch(() => null),
+        apiRequest<FraudAlert[]>(`/traffic/alerts/${selectedCampaignId}`).catch(() => []),
+      ]);
+      setQuality(scoreData ?? emptyTrafficQuality());
+      setAlerts(alertsData ?? []);
+    } catch (err) {
+      console.error('加载流量质量失败:', err);
+      setQuality(mockTrafficQuality as TrafficQuality);
+      setAlerts(mockFraudAlerts as FraudAlert[]);
+    } finally {
+      setLoadingTraffic(false);
+    }
   };
 
   const initSampleJourney = async () => {
@@ -149,7 +182,10 @@ function AttributionTraffic() {
   return (
     <div className="space-y-4 pb-6">
       <header>
-        <h1 className="text-2xl font-bold text-slate-100">归因分析 & 流量质量</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-slate-100">归因分析 & 流量质量</h1>
+          <DataSourceBadge />
+        </div>
         <p className="text-muted mt-1">多触点归因模型对比与实时流量质量监测</p>
       </header>
 

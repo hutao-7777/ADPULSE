@@ -1,6 +1,12 @@
 """AdPulse SQLAlchemy domain models."""
 
-from app.models.abtest import Assignment, Experiment, ExperimentMetric, Variant
+from app.models.abtest import (
+    Assignment,
+    Experiment,
+    ExperimentDailyStat,
+    ExperimentMetric,
+    Variant,
+)
 from app.models.agent import AgentConfig, AgentMemory, AgentRun, AgentStep
 from app.models.attribution import (
     AttributionResult,
@@ -10,6 +16,7 @@ from app.models.attribution import (
     TrafficQualityScore,
 )
 from app.models.base import Base
+from app.models.bid_record import BidRecord
 from app.models.campaign import (
     Advertiser,
     AudienceSegment,
@@ -18,13 +25,10 @@ from app.models.campaign import (
     Creative,
     DailyMetric,
 )
-from app.models.ipinyou import (
-    IpinyouBid,
-    IpinyouClick,
-    IpinyouConv,
-    IpinyouDailyStat,
-    IpinyouImp,
-)
+from app.models.click_record import ClickRecord
+from app.models.conv_record import ConvRecord
+from app.models.daily_stat import DailyStat
+from app.models.imp_record import ImpRecord
 from app.models.rtb import AuctionBid, AuctionRequest, AuctionWin
 from app.models.user import (
     ApiKey,
@@ -60,6 +64,7 @@ __all__ = [
     "Variant",
     "Assignment",
     "ExperimentMetric",
+    "ExperimentDailyStat",
     "ConversionEvent",
     "Touchpoint",
     "AttributionResult",
@@ -69,9 +74,9 @@ __all__ = [
     "AgentRun",
     "AgentStep",
     "AgentMemory",
-    "IpinyouBid",
-    "IpinyouImp",
-    "IpinyouClick",
-    "IpinyouConv",
-    "IpinyouDailyStat",
+    "BidRecord",
+    "ImpRecord",
+    "ClickRecord",
+    "ConvRecord",
+    "DailyStat",
 ]

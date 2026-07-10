@@ -49,6 +49,7 @@ class AttributionCompareResponse(BaseModel):
     models: Dict[str, Dict[str, float]]
     model_credits: Dict[str, Dict[str, float]]
     summary: str
+    data_source: Optional[str] = None
 
 
 class ChannelAverageCredit(BaseModel):
@@ -63,3 +64,4 @@ class ModelComparisonItem(BaseModel):
 
 class ModelComparisonResponse(BaseModel):
     comparisons: List[ModelComparisonItem]
+    data_source: Optional[str] = None

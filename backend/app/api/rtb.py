@@ -1,9 +1,9 @@
 """RTB API endpoints."""
 
 import uuid
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-from fastapi import Depends, status
+from fastapi import Depends, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,6 +52,7 @@ class BidResponseSchema(BaseModel):
     currency: str
     latency_ms: float
     reason: str | None
+    data_source: Optional[str] = None
 
 
 @router.post(
@@ -59,6 +60,7 @@ class BidResponseSchema(BaseModel):
 )
 async def run_auction(
     request: BidRequestSchema,
+    data_source: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     engine: RTBAuctionEngine = Depends(get_rtb_auction_engine),
     api_key: ApiKey = Depends(validate_api_key),
@@ -93,6 +95,7 @@ async def run_auction(
         "currency": response.currency,
         "latency_ms": response.latency_ms,
         "reason": response.reason,
+        "data_source": data_source,
     }
 
 
@@ -103,7 +106,7 @@ def _get_simulation_engine() -> AuctionEngine:
     return _simulation_engine
 
 
-def _result_to_schema(result: Dict) -> AuctionResult:
+def _result_to_schema(result: Dict, data_source: Optional[str] = None) -> AuctionResult:
     winner = result.get("winner")
     return AuctionResult(
         impression_id=result["impression_id"],
@@ -115,12 +118,14 @@ def _result_to_schema(result: Dict) -> AuctionResult:
         reason=result.get("reason"),
         latency_ms=result["latency_ms"],
         timestamp=result["timestamp"],
+        data_source=data_source,
     )
 
 
 @router.post("/simulate", response_model=AuctionResult)
 async def run_simulation_auction(
     request: SingleAuctionRequest,
+    data_source: Optional[str] = Query(None),
     engine: AuctionEngine = Depends(_get_simulation_engine),
     _user: User = Depends(get_current_active_user),
 ) -> AuctionResult:
@@ -136,12 +141,13 @@ async def run_simulation_auction(
         context_category=request.context_category,
     )
     result = engine.run_auction(impression)
-    return _result_to_schema(result)
+    return _result_to_schema(result, data_source)
 
 
 @router.post("/simulate/batch", response_model=BatchAuctionResponse)
 async def run_simulation_batch(
     request: BatchAuctionRequest,
+    data_source: Optional[str] = Query(None),
     engine: AuctionEngine = Depends(_get_simulation_engine),
     _user: User = Depends(get_current_active_user),
 ) -> BatchAuctionResponse:
@@ -184,13 +190,15 @@ async def run_simulation_batch(
 
     return BatchAuctionResponse(
         count=len(results),
-        results=[_result_to_schema(r) for r in results],
+        results=[_result_to_schema(r, data_source) for r in results],
         stats=stats,
+        data_source=data_source,
     )
 
 
 @router.get("/dsps", response_model=List[DSPStatus])
 async def list_simulation_dsps(
+    data_source: Optional[str] = Query(None),
     engine: AuctionEngine = Depends(_get_simulation_engine),
     _user: User = Depends(get_current_active_user),
 ) -> List[DSPStatus]:
@@ -203,6 +211,7 @@ async def list_simulation_dsps(
             max_cpm=dsp.max_cpm,
             pacing_rate=dsp.pacing_rate,
             bidding_strategy=dsp.bidding_strategy,
+            data_source=data_source,
         )
         for dsp in engine.registered_dsps
     ]

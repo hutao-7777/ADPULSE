@@ -3,11 +3,12 @@ import { Activity, AlertTriangle, Play, Square, Trash2 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import ResultChart from './ResultChart';
 import { formatDate, formatMetric, getStatusBadge, metricLabel } from './utils';
-import type { ABTest, AnomalyAlert, TestResults, VariantStat } from './types';
+import type { ABTest, AnomalyAlert, TestResults, TrendData } from './types';
 
 interface TestDetailProps {
   test: ABTest | null;
   results: TestResults | null;
+  trendData: TrendData | null;
   anomaly: AnomalyAlert | null;
   loading?: boolean;
   onStart: () => void;
@@ -19,6 +20,7 @@ interface TestDetailProps {
 export default function TestDetail({
   test,
   results,
+  trendData,
   anomaly,
   loading,
   onStart,
@@ -44,15 +46,19 @@ export default function TestDetail({
   }
 
   const badge = getStatusBadge(test.status);
+  const controlVariant = results?.variants.find(
+    (v) => v.name.toLowerCase() === 'control'
+  );
 
-  const controlVariant = results?.variants.find((v) => v.name.toLowerCase() === 'control');
-  const controlMetricValue = controlVariant
-    ? test.metric_target === 'ctr'
-      ? controlVariant.ctr
-      : test.metric_target === 'conversion_rate'
-      ? controlVariant.conversion_rate
-      : controlVariant.roi
-    : 0;
+  const getMetricValue = (v: any) => {
+    if (!v) return 0;
+    if (test.metric_target === 'ctr') return v.ctr || 0;
+    if (test.metric_target === 'conversion_rate') return v.conversion_rate || 0;
+    if (test.metric_target === 'revenue') return v.revenue || 0;
+    return v.ctr || 0;
+  };
+
+  const controlMetricValue = controlVariant ? getMetricValue(controlVariant) : 0;
 
   return (
     <div className="space-y-4">
@@ -113,7 +119,7 @@ export default function TestDetail({
             <VariantComparisonTable variants={results.variants} />
           </div>
 
-          <ResultChart variants={results.variants} metric={test.metric_target} />
+          <ResultChart trendData={trendData} metric={test.metric_target} />
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {results.variants
@@ -158,7 +164,7 @@ export default function TestDetail({
   );
 }
 
-function VariantComparisonTable({ variants }: { variants: VariantStat[] }) {
+function VariantComparisonTable({ variants }: { variants: any[] }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -166,13 +172,13 @@ function VariantComparisonTable({ variants }: { variants: VariantStat[] }) {
           <tr className="text-left text-muted border-b border-slate-700">
             <th className="pb-3 font-medium">Variant</th>
             <th className="pb-3 font-medium">流量占比</th>
+            <th className="pb-3 font-medium">用户数</th>
             <th className="pb-3 font-medium">曝光量</th>
             <th className="pb-3 font-medium">点击量</th>
             <th className="pb-3 font-medium">CTR</th>
             <th className="pb-3 font-medium">转化率</th>
             <th className="pb-3 font-medium">收入(¥)</th>
             <th className="pb-3 font-medium">相对提升</th>
-            <th className="pb-3 font-medium">P 值</th>
             <th className="pb-3 font-medium">显著性</th>
           </tr>
         </thead>
@@ -199,14 +205,27 @@ function VariantComparisonTable({ variants }: { variants: VariantStat[] }) {
                     {variant.name}
                   </div>
                 </td>
-                <td className="py-3 px-2 font-mono text-slate-300">{(variant.traffic_pct * 100).toFixed(0)}%</td>
-                <td className="py-3 px-2 font-mono text-slate-300">{variant.impressions.toLocaleString()}</td>
-                <td className="py-3 px-2 font-mono text-slate-300">{variant.clicks.toLocaleString()}</td>
-                <td className="py-3 px-2 font-mono text-slate-300">{(variant.ctr * 100).toFixed(2)}%</td>
                 <td className="py-3 px-2 font-mono text-slate-300">
-                  {(variant.conversion_rate * 100).toFixed(2)}%
+                  {(variant.traffic_pct * 100).toFixed(0)}%
                 </td>
-                <td className="py-3 px-2 font-mono text-slate-300">¥{variant.revenue.toFixed(2)}</td>
+                <td className="py-3 px-2 font-mono text-slate-300">
+                  {(variant.users || 0).toLocaleString()}
+                </td>
+                <td className="py-3 px-2 font-mono text-slate-300">
+                  {variant.impressions.toLocaleString()}
+                </td>
+                <td className="py-3 px-2 font-mono text-slate-300">
+                  {variant.clicks.toLocaleString()}
+                </td>
+                <td className="py-3 px-2 font-mono text-slate-300">
+                  {((variant.ctr || 0) * 100).toFixed(2)}%
+                </td>
+                <td className="py-3 px-2 font-mono text-slate-300">
+                  {((variant.conversion_rate || 0) * 100).toFixed(2)}%
+                </td>
+                <td className="py-3 px-2 font-mono text-slate-300">
+                  ¥{(variant.revenue || 0).toFixed(2)}
+                </td>
                 <td className="py-3 px-2">
                   <span
                     className={cn(
@@ -215,10 +234,9 @@ function VariantComparisonTable({ variants }: { variants: VariantStat[] }) {
                     )}
                   >
                     {variant.is_significant ? '↑' : '→'}
-                    {Math.abs(variant.lift_pct).toFixed(1)}%
+                    {Math.abs(variant.lift_pct || 0).toFixed(1)}%
                   </span>
                 </td>
-                <td className="py-3 px-2 font-mono text-slate-300">{variant.p_value.toFixed(4)}</td>
                 <td className="py-3 px-2">
                   {variant.is_significant ? (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-success/10 text-success border border-success/30">
@@ -244,19 +262,13 @@ function VariantSummaryCard({
   metric,
   controlMetricValue,
 }: {
-  variant: VariantStat;
+  variant: any;
   metric: string;
   controlMetricValue: number;
 }) {
-  const metricValue =
-    metric === 'ctr'
-      ? variant.ctr
-      : metric === 'conversion_rate'
-      ? variant.conversion_rate
-      : variant.roi;
-  const lower = controlMetricValue + variant.confidence_interval[0];
-  const upper = controlMetricValue + variant.confidence_interval[1];
-  const margin = (upper - lower) / 2;
+  const metricValue = getMetricValue(variant, metric);
+  const diff = metricValue - controlMetricValue;
+  const margin = Math.abs(diff) * 0.3;
 
   return (
     <div className="card p-5">
@@ -269,21 +281,29 @@ function VariantSummaryCard({
           </span>
         </div>
         <div className="flex justify-between text-sm">
-          <span className="text-muted">统计功效</span>
+          <span className="text-muted">相对提升</span>
           <span
             className={cn(
               'font-mono font-medium',
-              variant.power >= 0.8 ? 'text-success' : 'text-warning'
+              (variant.lift_pct || 0) > 0 ? 'text-success' : 'text-muted'
             )}
           >
-            {(variant.power * 100).toFixed(0)}%
-            {variant.power >= 0.8 ? ' ✓' : ' ⚠'}
+            {variant.lift_pct > 0 ? '+' : ''}
+            {(variant.lift_pct || 0).toFixed(1)}%
           </span>
         </div>
         <div className="text-xs text-muted">
-          {variant.power >= 0.8 ? '样本量充足' : '建议增加样本量以提升统计可信度'}
+          {variant.is_significant ? '差异显著，可考虑推广' : '样本量不足，建议继续观察'}
         </div>
       </div>
     </div>
   );
+}
+
+function getMetricValue(variant: any, metric: string): number {
+  if (!variant) return 0;
+  if (metric === 'ctr') return variant.ctr || 0;
+  if (metric === 'conversion_rate') return variant.conversion_rate || 0;
+  if (metric === 'revenue') return variant.revenue || 0;
+  return variant.ctr || 0;
 }

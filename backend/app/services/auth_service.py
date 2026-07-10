@@ -3,8 +3,6 @@
 import secrets
 import uuid
 from datetime import timedelta
-
-from app.models.base import utc_now
 from typing import Optional
 
 from fastapi import HTTPException, status
@@ -20,6 +18,7 @@ from app.core.security import (
     verify_password,
 )
 from app.models import ApiKey, RefreshToken, Role, User
+from app.models.base import utc_now
 
 
 class AuthService:

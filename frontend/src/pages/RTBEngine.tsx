@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 
 import { apiRequest } from '../utils/api';
+import DataSourceBadge from '../components/DataSourceBadge';
 import { cn } from '../utils/cn';
 
 // ------------------------------------------------------------------
@@ -778,7 +779,10 @@ function RTBEngine() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-bold text-slate-100">RTB 竞价引擎</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-slate-100">RTB 竞价引擎</h1>
+          <DataSourceBadge />
+        </div>
         <p className="text-muted mt-1">程序化广告实时竞价流程可视化与模拟</p>
       </header>
 

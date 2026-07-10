@@ -5,12 +5,13 @@ All primary keys use UUID. The runtime target is SQLite via aiosqlite.
 
 from __future__ import annotations
 
+import datetime
 import uuid
-from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import (
     JSON,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -52,10 +53,10 @@ class Experiment(Base):
     )  # percentage of eligible traffic
     min_sample_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_duration_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    start_date: Mapped[Optional[datetime]] = mapped_column(
+    start_date: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime(timezone=False), nullable=True
     )
-    end_date: Mapped[Optional[datetime]] = mapped_column(
+    end_date: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime(timezone=False), nullable=True
     )
     winner_variant_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -63,10 +64,10 @@ class Experiment(Base):
         ForeignKey("variants.id", ondelete="SET NULL"),
         nullable=True,
     )
-    created_at: Mapped[datetime] = mapped_column(
+    created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=False), default=utc_now, nullable=False
     )
-    updated_at: Mapped[datetime] = mapped_column(
+    updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=False),
         default=utc_now,
         onupdate=utc_now,
@@ -99,6 +100,12 @@ class Experiment(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    daily_stats: Mapped[List["ExperimentDailyStat"]] = relationship(
+        "ExperimentDailyStat",
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         Index("ix_experiments_status_dates", "status", "start_date", "end_date"),
@@ -123,7 +130,7 @@ class Variant(Base):
     )  # control, treatment-A, ...
     traffic_pct: Mapped[float] = mapped_column(Float, nullable=False)
     config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
+    created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=False), default=utc_now, nullable=False
     )
 
@@ -134,6 +141,9 @@ class Variant(Base):
     )
     metrics: Mapped[List["ExperimentMetric"]] = relationship(
         "ExperimentMetric", back_populates="variant"
+    )
+    daily_stats: Mapped[List["ExperimentDailyStat"]] = relationship(
+        "ExperimentDailyStat", back_populates="variant", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
@@ -161,7 +171,7 @@ class Assignment(Base):
     )
     user_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     bucket: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
+    created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=False), default=utc_now, nullable=False
     )
 
@@ -175,6 +185,40 @@ class Assignment(Base):
             "experiment_id", "user_id", name="uq_assignment_experiment_user"
         ),
         Index("ix_assignments_user_experiment", "user_id", "experiment_id"),
+    )
+
+
+class ExperimentDailyStat(Base):
+    __tablename__ = "experiment_daily_stats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    experiment_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("experiments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    variant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("variants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    users: Mapped[int] = mapped_column(Integer, default=0)
+    impressions: Mapped[int] = mapped_column(Integer, default=0)
+    clicks: Mapped[int] = mapped_column(Integer, default=0)
+    conversions: Mapped[int] = mapped_column(Integer, default=0)
+    revenue: Mapped[float] = mapped_column(Float, default=0.0)
+
+    experiment: Mapped["Experiment"] = relationship(
+        "Experiment", back_populates="daily_stats"
+    )
+    variant: Mapped["Variant"] = relationship("Variant", back_populates="daily_stats")
+
+    __table_args__ = (
+        UniqueConstraint("experiment_id", "variant_id", "date", name="uq_exp_var_date"),
+        Index("ix_exp_daily_exp_date", "experiment_id", "date"),
     )
 
 
@@ -202,7 +246,7 @@ class ExperimentMetric(Base):
     event_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=False), nullable=False
     )
-    created_at: Mapped[datetime] = mapped_column(
+    created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=False), default=utc_now, nullable=False
     )
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AlertCircle, X } from 'lucide-react';
 
 import { apiRequest } from '../utils/api';
+import DataSourceBadge from '../components/DataSourceBadge';
 import AgentConfig from '../components/agent/AgentConfig';
 import AgentStep from '../components/agent/AgentStep';
 import AgentLog from '../components/agent/AgentLog';
@@ -211,7 +212,10 @@ function AgentLoop() {
   return (
     <div className="space-y-4 pb-6">
       <header>
-        <h1 className="text-2xl font-bold text-slate-100">Agent Loop</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-slate-100">Agent Loop</h1>
+          <DataSourceBadge />
+        </div>
         <p className="text-muted mt-1">可视化 AI Agent 的 Think → Act → Observe 完整决策链路</p>
       </header>
 

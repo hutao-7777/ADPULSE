@@ -4,7 +4,7 @@ export interface ABTest {
   campaign_id: string;
   status: 'draft' | 'running' | 'stopped' | 'completed';
   traffic_split: number;
-  metric_target: 'ctr' | 'conversion_rate' | 'roi';
+  metric_target: 'ctr' | 'conversion_rate' | 'revenue' | 'roi';
   min_sample_size?: number;
   start_date: string | null;
   end_date: string | null;
@@ -55,4 +55,26 @@ export interface AnomalyAlert {
 export interface CampaignOption {
   id: string;
   name: string;
+}
+
+export interface DailyStat {
+  date: string;
+  date_label: string;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  revenue: number;
+  users: number;
+  ctr: number;
+  conversion_rate: number;
+}
+
+export interface VariantTrend {
+  name: string;
+  daily: DailyStat[];
+}
+
+export interface TrendData {
+  dates: string[];
+  variants: VariantTrend[];
 }

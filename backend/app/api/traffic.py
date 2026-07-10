@@ -1,9 +1,9 @@
 """Traffic quality and fraud alert API endpoints."""
 
 import uuid
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,6 +68,7 @@ async def assess_traffic(
 @router.get("/quality/{campaign_id}", response_model=TrafficQualityResponse)
 async def get_latest_quality(
     campaign_id: str,
+    data_source: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> TrafficQualityScore:
     """Return the most recent quality score for a campaign."""
@@ -82,6 +83,7 @@ async def get_latest_quality(
         select(TrafficQualityScore)
         .where(TrafficQualityScore.campaign_id == campaign_uuid)
         .order_by(TrafficQualityScore.date.desc())
+        .limit(1)
     )
     score = result.scalar_one_or_none()
     if score is None:
@@ -94,10 +96,11 @@ async def get_latest_quality(
 @router.get("/trend/{campaign_id}", response_model=QualityTrendResponse)
 async def get_quality_trend(
     campaign_id: str,
+    data_source: Optional[str] = Query(None),
     days: int = 7,
     db: AsyncSession = Depends(get_db),
     engine: TrafficQualityEngine = Depends(_get_engine),
-) -> Dict[str, List[dict]]:
+) -> Dict[str, Any]:
     """Return daily traffic quality trend for a campaign."""
     campaign_uuid = _as_uuid(campaign_id)
     if campaign_uuid is None:
@@ -107,12 +110,15 @@ async def get_quality_trend(
         )
 
     trend = await engine.get_campaign_quality_trend(db, campaign_uuid, days)
-    return {"trend": trend}
+    for point in trend:
+        point["data_source"] = data_source
+    return {"trend": trend, "data_source": data_source}
 
 
 @router.get("/alerts/{campaign_id}", response_model=List[FraudAlertResponse])
 async def get_fraud_alerts(
     campaign_id: str,
+    data_source: Optional[str] = Query(None),
     status_filter: Optional[str] = "open",
     db: AsyncSession = Depends(get_db),
 ) -> List[FraudAlert]:

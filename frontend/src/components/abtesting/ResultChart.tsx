@@ -11,33 +11,69 @@ import {
 } from 'recharts';
 import { TrendingUp } from 'lucide-react';
 
-import type { VariantStat } from './types';
+import type { DailyStat, TrendData } from './types';
 
 interface ResultChartProps {
-  variants: VariantStat[];
+  trendData: TrendData | null;
   metric: string;
 }
 
 const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#A855F7'];
 
-export default function ResultChart({ variants, metric }: ResultChartProps) {
+function getMetricValue(day: DailyStat, metric: string): number {
+  if (metric === 'ctr') return day.ctr ?? 0;
+  if (metric === 'conversion_rate') return day.conversion_rate ?? 0;
+  if (metric === 'revenue') return day.revenue ?? 0;
+  return day.ctr ?? 0;
+}
+
+function formatYAxis(v: number, metric: string): string {
+  if (metric === 'revenue') return `¥${v.toFixed(0)}`;
+  return `${(v * 100).toFixed(1)}%`;
+}
+
+function formatTooltip(v: number, metric: string): string {
+  if (metric === 'revenue') return `¥${v.toFixed(2)}`;
+  return `${(v * 100).toFixed(2)}%`;
+}
+
+export default function ResultChart({ trendData, metric }: ResultChartProps) {
   const data = useMemo(() => {
-    const days = 14;
-    const base = new Date();
-    base.setDate(base.getDate() - days);
-    return Array.from({ length: days }).map((_, i) => {
-      const date = new Date(base);
-      date.setDate(date.getDate() + i);
-      const label = date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+    if (!trendData || !trendData.variants || trendData.variants.length === 0) {
+      return [];
+    }
+
+    const dates = trendData.variants[0].daily.map((d) => d.date_label);
+    return dates.map((label, i) => {
       const point: Record<string, number | string> = { date: label };
-      variants.forEach((v) => {
-        const baseValue = metric === 'ctr' ? v.ctr : metric === 'conversion_rate' ? v.conversion_rate : v.roi;
-        const noise = (Math.random() - 0.5) * baseValue * 0.4;
-        point[v.name] = Math.max(0, baseValue + noise);
+      trendData.variants.forEach((v) => {
+        const day = v.daily[i];
+        if (day) {
+          point[v.name] = getMetricValue(day, metric);
+        }
       });
       return point;
     });
-  }, [variants, metric]);
+  }, [trendData, metric]);
+
+  const variantNames = useMemo(() => {
+    if (!trendData) return [];
+    return trendData.variants.map((v) => v.name);
+  }, [trendData]);
+
+  if (!trendData || data.length === 0) {
+    return (
+      <div className="card p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <TrendingUp size={18} className="text-accent" />
+          <h3 className="text-base font-semibold text-slate-100">趋势对比</h3>
+        </div>
+        <div className="h-[280px] flex items-center justify-center text-slate-500 text-sm">
+          暂无趋势数据 — 运行实验后将自动产生
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="card p-5">
@@ -55,30 +91,30 @@ export default function ResultChart({ variants, metric }: ResultChartProps) {
               fontSize={12}
               tickLine={false}
               axisLine={false}
-              tickFormatter={(v) => (metric === 'roi' ? `${v}x` : `${(v * 100).toFixed(1)}%`)}
+              tickFormatter={(v) => formatYAxis(v, metric)}
             />
             <Tooltip
               contentStyle={{
-                backgroundColor: '#1E293B',
+                backgroundColor: '#1e293b',
                 border: '1px solid #334155',
                 borderRadius: '8px',
+                color: '#f1f5f9',
+                fontSize: '12px',
               }}
-              labelStyle={{ color: '#F1F5F9' }}
-              itemStyle={{ color: '#CBD5E1' }}
-              formatter={(value: number) =>
-                metric === 'roi' ? [`${value.toFixed(2)}x`, ''] : [`${(value * 100).toFixed(2)}%`, '']
-              }
+              formatter={(value: any, name: string) => [
+                formatTooltip(Number(value), metric),
+                name,
+              ]}
             />
-            <Legend wrapperStyle={{ paddingTop: '10px' }} />
-            {variants.map((v, i) => (
+            <Legend wrapperStyle={{ fontSize: '12px', color: '#94a3b8' }} />
+            {variantNames.map((name, i) => (
               <Line
-                key={v.name}
+                key={name}
                 type="monotone"
-                dataKey={v.name}
-                name={v.name}
+                dataKey={name}
                 stroke={COLORS[i % COLORS.length]}
                 strokeWidth={2}
-                dot={{ r: 3, strokeWidth: 0 }}
+                dot={{ r: 3, fill: COLORS[i % COLORS.length] }}
                 activeDot={{ r: 5 }}
               />
             ))}

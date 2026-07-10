@@ -32,6 +32,7 @@ class TrafficQualityResponse(BaseModel):
     interaction_score: float
     flags: List[str]
     anomaly_count: int
+    data_source: Optional[str] = None
 
 
 class FraudAlertResponse(BaseModel):
@@ -44,6 +45,7 @@ class FraudAlertResponse(BaseModel):
     description: str
     detected_at: datetime
     status: str
+    data_source: Optional[str] = None
 
 
 class QualityTrendPoint(BaseModel):
@@ -61,3 +63,4 @@ class QualityTrendPoint(BaseModel):
 
 class QualityTrendResponse(BaseModel):
     trend: List[QualityTrendPoint]
+    data_source: Optional[str] = None

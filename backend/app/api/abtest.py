@@ -2,9 +2,9 @@
 
 import uuid
 from datetime import datetime
-from typing import Any, List
+from typing import Any, List, Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,9 +13,10 @@ from sqlalchemy.orm import selectinload
 from app.core.database import get_db
 from app.core.response import APIRouter
 from app.core.security import require_permission
-from app.models import Experiment, ExperimentMetric, User, Variant
+from app.models import Experiment, ExperimentDailyStat, ExperimentMetric, User, Variant
 from app.models.base import utc_now
 from app.services.ab_test_engine import ABTestEngine
+from app.services.experiment_simulator import experiment_simulator
 
 router = APIRouter(prefix="/api/abtests", tags=["abtest"])
 engine = ABTestEngine()
@@ -72,6 +73,7 @@ class ExperimentVariantResponse(BaseModel):
     config: dict
     traffic_allocation: int
     created_at: datetime
+    data_source: Optional[str] = None
 
 
 class ExperimentResponse(BaseModel):
@@ -88,6 +90,7 @@ class ExperimentResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     variants: List[ExperimentVariantResponse]
+    data_source: Optional[str] = None
 
 
 class ExperimentStatusUpdate(BaseModel):
@@ -111,7 +114,7 @@ async def create_experiment(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("campaign:write")),
 ) -> dict[str, Any]:
-    """Create a new A/B experiment with variants."""
+    """Create a new A/B experiment with variants and simulated historical data."""
     experiment = Experiment(
         id=uuid.uuid4(),
         campaign_id=request.campaign_id,
@@ -137,6 +140,16 @@ async def create_experiment(
         db.add(variant)
 
     await db.commit()
+
+    # Generate historical mock data from start_date up to today.
+    stmt = select(Variant).where(Variant.experiment_id == experiment.id)
+    result = await db.execute(stmt)
+    variants_list = list(result.scalars().all())
+
+    start = experiment.start_date or utc_now()
+    if isinstance(start, datetime):
+        start = start.date()
+    await experiment_simulator.generate_history(experiment.id, variants_list, start, db)
 
     result = await db.execute(
         select(Experiment)
@@ -307,17 +320,159 @@ async def record_metric(
 @router.get("/{experiment_id}/analysis")
 async def analyze_experiment(
     experiment_id: uuid.UUID,
-    metric_name: str | None = None,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("campaign:read")),
 ) -> dict[str, Any]:
-    """Return t-test, Mann-Whitney U, power, MDE and confidence intervals."""
-    experiment = await db.get(Experiment, experiment_id)
-    if experiment is None:
+    """Aggregate experiment stats from ExperimentDailyStat and return comparisons."""
+    exp_result = await db.execute(
+        select(Experiment).where(Experiment.id == experiment_id)
+    )
+    exp = exp_result.scalar_one_or_none()
+    if not exp:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Experiment not found"
         )
-    return await engine.analyze(db, experiment_id, metric_name)
+
+    v_result = await db.execute(
+        select(Variant).where(Variant.experiment_id == experiment_id)
+    )
+    variants = list(v_result.scalars().all())
+
+    d_result = await db.execute(
+        select(ExperimentDailyStat).where(
+            ExperimentDailyStat.experiment_id == experiment_id
+        )
+    )
+    rows = list(d_result.scalars().all())
+
+    variant_summaries = []
+    control_summary = None
+    for v in variants:
+        v_rows = [r for r in rows if r.variant_id == v.id]
+        total_users = sum(r.users for r in v_rows)
+        total_impressions = sum(r.impressions for r in v_rows)
+        total_clicks = sum(r.clicks for r in v_rows)
+        total_conversions = sum(r.conversions for r in v_rows)
+        total_revenue = sum(r.revenue for r in v_rows)
+
+        ctr = total_clicks / total_impressions if total_impressions > 0 else 0.0
+        cvr = total_conversions / total_users if total_users > 0 else 0.0
+        avg_revenue = total_revenue / total_users if total_users > 0 else 0.0
+
+        summary = {
+            "variant_id": str(v.id),
+            "name": v.name,
+            "traffic_pct": v.traffic_pct,
+            "users": total_users,
+            "impressions": total_impressions,
+            "clicks": total_clicks,
+            "conversions": total_conversions,
+            "revenue": round(total_revenue, 2),
+            "ctr": round(ctr, 4),
+            "conversion_rate": round(cvr, 4),
+            "avg_revenue_per_user": round(avg_revenue, 2),
+        }
+        variant_summaries.append(summary)
+        if v.name.lower() == "control":
+            control_summary = summary
+
+    if control_summary is None and variant_summaries:
+        control_summary = variant_summaries[0]
+
+    comparisons = []
+    metric_key = {
+        "ctr": "ctr",
+        "conversion_rate": "conversion_rate",
+        "revenue": "avg_revenue_per_user",
+    }.get(exp.metric_name, "ctr")
+
+    for vs in variant_summaries:
+        if control_summary and vs["name"].lower() == control_summary["name"].lower():
+            continue
+        ctrl_val = control_summary.get(metric_key, 0) if control_summary else 0
+        treat_val = vs.get(metric_key, 0)
+        lift = ((treat_val - ctrl_val) / ctrl_val * 100) if ctrl_val > 0 else 0.0
+        comparisons.append(
+            {
+                "variant_name": vs["name"],
+                "control_name": (
+                    control_summary["name"] if control_summary else "baseline"
+                ),
+                "metric": exp.metric_name,
+                "control_value": round(ctrl_val, 4),
+                "treatment_value": round(treat_val, 4),
+                "relative_lift_pct": round(lift, 2),
+                "is_significant": abs(lift) > 5.0,
+            }
+        )
+
+    return {
+        "experiment_id": str(exp.id),
+        "status": exp.status,
+        "metric": exp.metric_name,
+        "control": control_summary,
+        "variants": variant_summaries,
+        "comparisons": comparisons,
+    }
+
+
+@router.get("/{experiment_id}/trend")
+async def get_experiment_trend(
+    experiment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("campaign:read")),
+) -> dict[str, Any]:
+    """Return daily stats for each variant, for the trend chart."""
+    v_stmt = select(Variant).where(Variant.experiment_id == experiment_id)
+    v_result = await db.execute(v_stmt)
+    variants = {v.id: v.name for v in v_result.scalars().all()}
+    if not variants:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Experiment not found or has no variants",
+        )
+
+    d_stmt = (
+        select(ExperimentDailyStat)
+        .where(ExperimentDailyStat.experiment_id == experiment_id)
+        .order_by(ExperimentDailyStat.date.asc())
+    )
+    d_result = await db.execute(d_stmt)
+    rows = d_result.scalars().all()
+
+    dates = sorted({r.date.isoformat() for r in rows})
+    date_labels = [d[5:].replace("-", "/") for d in dates]
+
+    variant_data: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        vname = variants.get(r.variant_id, "unknown")
+        if vname not in variant_data:
+            variant_data[vname] = []
+        ctr = r.clicks / r.impressions if r.impressions > 0 else 0.0
+        cvr = r.conversions / r.users if r.users > 0 else 0.0
+        variant_data[vname].append(
+            {
+                "date": r.date.isoformat(),
+                "date_label": r.date.strftime("%m/%d").lstrip("0").replace("/0", "/"),
+                "impressions": r.impressions,
+                "clicks": r.clicks,
+                "conversions": r.conversions,
+                "revenue": r.revenue,
+                "users": r.users,
+                "ctr": round(ctr, 4),
+                "conversion_rate": round(cvr, 4),
+            }
+        )
+
+    return {
+        "dates": date_labels,
+        "variants": [
+            {"name": name, "daily": variant_data[name]}
+            for name in sorted(
+                variant_data.keys(), key=lambda n: (n.lower() != "control", n)
+            )
+        ],
+    }
 
 
 def _experiment_to_response(experiment: Experiment) -> dict[str, Any]:
@@ -351,6 +506,7 @@ def _experiment_to_response(experiment: Experiment) -> dict[str, Any]:
 @router.get("", response_model=List[ExperimentResponse])
 async def list_experiments(
     status_filter: str | None = None,
+    data_source: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("campaign:read")),
 ) -> List[dict[str, Any]]:
@@ -359,12 +515,16 @@ async def list_experiments(
     if status_filter:
         query = query.where(Experiment.status == status_filter)
     result = await db.execute(query.options(selectinload(Experiment.variants)))
-    return [_experiment_to_response(e) for e in result.scalars().all()]
+    return [
+        {**_experiment_to_response(e), "data_source": data_source}
+        for e in result.scalars().all()
+    ]
 
 
 @router.get("/{experiment_id}", response_model=ExperimentResponse)
 async def get_experiment(
     experiment_id: uuid.UUID,
+    data_source: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("campaign:read")),
 ) -> dict[str, Any]:
@@ -375,7 +535,7 @@ async def get_experiment(
             status_code=status.HTTP_404_NOT_FOUND, detail="Experiment not found"
         )
     await db.refresh(experiment, attribute_names=["variants"])
-    return _experiment_to_response(experiment)
+    return {**_experiment_to_response(experiment), "data_source": data_source}
 
 
 @router.post("/{experiment_id}/start", response_model=ExperimentResponse)

@@ -1,15 +1,23 @@
 import { useEffect, useState } from 'react';
 
 import { apiRequest } from '../utils/api';
+import DataSourceBadge from '../components/DataSourceBadge';
 import TestDetail from '../components/abtesting/TestDetail';
 import TestForm from '../components/abtesting/TestForm';
 import TestList from '../components/abtesting/TestList';
-import type { ABTest, AnomalyAlert, TestResults } from '../components/abtesting/types';
+import type {
+  ABTest,
+  AnomalyAlert,
+  TestResults,
+  TrendData,
+  VariantStat,
+} from '../components/abtesting/types';
 
 function ABTesting() {
   const [tests, setTests] = useState<ABTest[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [results, setResults] = useState<TestResults | null>(null);
+  const [trendData, setTrendData] = useState<TrendData | null>(null);
   const [anomaly, setAnomaly] = useState<AnomalyAlert | null>(null);
   const [loadingList, setLoadingList] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -25,7 +33,7 @@ function ABTesting() {
         data.map((t) => ({
           ...t,
           metric_target: t.success_metric || 'conversion_rate',
-          winner: null,
+          winner: t.winner_variant_id || null,
         }))
       );
       if (data.length > 0 && !selectedId) {
@@ -42,36 +50,48 @@ function ABTesting() {
     setLoadingDetail(true);
     try {
       const analysis = await apiRequest<any>(`/abtests/${id}/analysis`);
+      const allVariants: any[] = analysis.variants || [];
+
+      const variantStats: VariantStat[] = allVariants.map((v: any) => ({
+        name: v.name,
+        traffic_pct: v.traffic_pct || 0,
+        impressions: v.impressions || 0,
+        clicks: v.clicks || 0,
+        conversions: v.conversions || 0,
+        revenue: v.revenue || 0,
+        users: v.users || 0,
+        ctr: v.ctr || 0,
+        conversion_rate: v.conversion_rate || 0,
+        roi: v.revenue && v.users ? v.revenue / v.users : 0,
+        lift_pct: 0,
+        p_value: 1,
+        is_significant: false,
+        sample_size_reached: false,
+        confidence_interval: [0, 0],
+        power: 0,
+      }));
+
+      const comparisons = (analysis.comparisons || []).map((c: any) => ({
+        variant_name: c.variant_name,
+        control_name: c.control_name,
+        relative_lift_pct: c.relative_lift_pct || 0,
+        is_significant: c.is_significant || false,
+      }));
+
+      // Merge lift/significance into variant stats
+      variantStats.forEach((vs) => {
+        const comp = comparisons.find((c: any) => c.variant_name === vs.name);
+        if (comp) {
+          vs.lift_pct = comp.relative_lift_pct;
+          vs.is_significant = comp.is_significant;
+        }
+      });
+
       const test = tests.find((t) => t.id === id);
-      const control = analysis.control || {};
-      const comparisons: any[] = analysis.comparisons || [];
       const startDate = test?.start_date ? new Date(test.start_date) : null;
       const daysRunning = startDate
         ? Math.max(1, Math.ceil((Date.now() - startDate.getTime()) / 86400000))
         : 0;
-
-      const buildVariant = (name: string, data: any, isControl: boolean): any => ({
-        name,
-        traffic_pct: isControl ? 100 - comparisons.reduce((sum, _c) => sum + (data.traffic_pct || 0), 0) : data.traffic_pct || 0,
-        impressions: data.n || 0,
-        clicks: 0,
-        conversions: 0,
-        revenue: 0,
-        ctr: 0,
-        conversion_rate: data.mean || 0,
-        roi: 0,
-        lift_pct: isControl ? 0 : data.relative_lift_pct || 0,
-        p_value: isControl ? 1 : data.p_value_ttest || 1,
-        is_significant: isControl ? false : data.is_significant || false,
-        sample_size_reached: (data.n || 0) >= (test?.min_sample_size || 0),
-        confidence_interval: isControl ? [0, 0] : (data.confidence_interval_95 || [0, 0]),
-        power: isControl ? 0 : data.power || 0,
-      });
-
-      const variants = [buildVariant(control.name || 'control', control, true)];
-      comparisons.forEach((c: any) => {
-        variants.push(buildVariant(c.variant_name, c, false));
-      });
 
       setResults({
         test_info: {
@@ -81,14 +101,43 @@ function ABTesting() {
           start_date: test?.start_date || null,
           days_running: daysRunning,
         },
-        variants,
-        recommendation: analysis.recommendation || '持续观察实验数据，等待样本量达到统计要求后再做决策。',
+        variants: variantStats,
+        recommendation:
+          comparisons.length > 0 && comparisons.some((c: any) => c.is_significant)
+            ? `${comparisons.find((c: any) => c.is_significant)?.variant_name} 表现显著优于 Control，建议推广该变体。`
+            : '各变体差异尚未达到统计显著，建议继续运行实验积累样本。',
       });
-      setAnomaly(null);
+
+      if (comparisons.length > 0 && test?.status === 'running') {
+        const sig = comparisons.filter((c: any) => c.is_significant);
+        if (sig.length > 0) {
+          setAnomaly({
+            variant: sig[0].variant_name,
+            metric: test.metric_target,
+            current_value: sig[0].treatment_value || 0,
+            expected_range: [0, sig[0].control_value || 0],
+            severity: 'warning',
+          });
+        } else {
+          setAnomaly(null);
+        }
+      } else {
+        setAnomaly(null);
+      }
     } catch (err) {
       console.error('获取测试详情失败:', err);
     } finally {
       setLoadingDetail(false);
+    }
+  };
+
+  const fetchTrend = async (id: string) => {
+    try {
+      const data = await apiRequest<TrendData>(`/abtests/${id}/trend`);
+      setTrendData(data);
+    } catch (err) {
+      console.error('获取趋势数据失败:', err);
+      setTrendData(null);
     }
   };
 
@@ -97,7 +146,19 @@ function ABTesting() {
   }, []);
 
   useEffect(() => {
-    if (selectedId) fetchDetail(selectedId);
+    if (selectedId) {
+      fetchDetail(selectedId);
+      fetchTrend(selectedId);
+    }
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const interval = setInterval(() => {
+      fetchDetail(selectedId);
+      fetchTrend(selectedId);
+    }, 30000);
+    return () => clearInterval(interval);
   }, [selectedId]);
 
   const handleStart = async () => {
@@ -106,6 +167,7 @@ function ABTesting() {
       await apiRequest(`/abtests/${selectedId}/start`, { method: 'POST' });
       fetchTests();
       fetchDetail(selectedId);
+      fetchTrend(selectedId);
     } catch (err) {
       alert(err instanceof Error ? err.message : '启动失败');
     }
@@ -117,6 +179,7 @@ function ABTesting() {
       await apiRequest(`/abtests/${selectedId}/stop`, { method: 'POST' });
       fetchTests();
       fetchDetail(selectedId);
+      fetchTrend(selectedId);
     } catch (err) {
       alert(err instanceof Error ? err.message : '停止失败');
     }
@@ -129,6 +192,7 @@ function ABTesting() {
       setSelectedId(null);
       fetchTests();
       setResults(null);
+      setTrendData(null);
       setAnomaly(null);
     } catch (err) {
       alert(err instanceof Error ? err.message : '删除失败');
@@ -138,7 +202,10 @@ function ABTesting() {
   return (
     <div className="h-[calc(100vh-48px)] flex flex-col">
       <header className="mb-4">
-        <h1 className="text-2xl font-bold text-slate-100">A/B 测试</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-slate-100">A/B 测试</h1>
+          <DataSourceBadge />
+        </div>
         <p className="text-muted mt-1">创建实验、分析统计结果并做出数据驱动决策</p>
       </header>
 
@@ -156,12 +223,18 @@ function ABTesting() {
           <TestDetail
             test={selectedTest}
             results={results}
+            trendData={trendData}
             anomaly={anomaly}
             loading={loadingDetail}
             onStart={handleStart}
             onStop={handleStop}
             onDelete={handleDelete}
-            onRefresh={() => selectedId && fetchDetail(selectedId)}
+            onRefresh={() => {
+              if (selectedId) {
+                fetchDetail(selectedId);
+                fetchTrend(selectedId);
+              }
+            }}
           />
         </div>
       </div>
