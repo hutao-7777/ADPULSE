@@ -8,5 +8,5 @@ Base = declarative_base()
 
 
 def utc_now() -> datetime:
-    """Return the current UTC time as a timezone-naive datetime."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    """Return the current UTC time as a timezone-aware datetime."""
+    return datetime.now(timezone.utc)

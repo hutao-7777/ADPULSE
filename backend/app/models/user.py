@@ -28,9 +28,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, utc_now
 
 if TYPE_CHECKING:
-    from app.models.agent import AgentConfig, AgentRun
-    from app.models.campaign import Advertiser
-
+    pass
 user_roles = Table(
     "user_roles",
     Base.metadata,
@@ -80,10 +78,10 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=False), default=utc_now, nullable=False
+        DateTime(timezone=True), default=utc_now, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=False),
+        DateTime(timezone=True),
         default=utc_now,
         onupdate=utc_now,
         nullable=False,
@@ -102,17 +100,6 @@ class User(Base):
     refresh_tokens: Mapped[List["RefreshToken"]] = relationship(
         "RefreshToken", back_populates="user"
     )
-    advertisers: Mapped[List["Advertiser"]] = relationship(
-        "Advertiser", back_populates="owner"
-    )
-    agent_configs: Mapped[List["AgentConfig"]] = relationship(
-        "AgentConfig", back_populates="user"
-    )
-    agent_runs: Mapped[List["AgentRun"]] = relationship(
-        "AgentRun", back_populates="user"
-    )
-
-    __table_args__ = (Index("ix_users_email_active", "email", "is_active"),)
 
 
 class Role(Base):
@@ -126,7 +113,7 @@ class Role(Base):
     )
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=False), default=utc_now, nullable=False
+        DateTime(timezone=True), default=utc_now, nullable=False
     )
 
     users: Mapped[List["User"]] = relationship(
@@ -148,7 +135,7 @@ class Permission(Base):
     )
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=False), default=utc_now, nullable=False
+        DateTime(timezone=True), default=utc_now, nullable=False
     )
 
     roles: Mapped[List["Role"]] = relationship(
@@ -174,7 +161,7 @@ class UserPermission(Base):
         nullable=False,
     )
     granted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=False), default=utc_now, nullable=False
+        DateTime(timezone=True), default=utc_now, nullable=False
     )
 
     __table_args__ = (
@@ -198,13 +185,13 @@ class RefreshToken(Base):
         String(255), unique=True, nullable=False, index=True
     )
     expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=False), nullable=False
+        DateTime(timezone=True), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=False), default=utc_now, nullable=False
+        DateTime(timezone=True), default=utc_now, nullable=False
     )
     revoked_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=False), nullable=True
+        DateTime(timezone=True), nullable=True
     )
 
     user: Mapped["User"] = relationship("User", back_populates="refresh_tokens")
@@ -231,13 +218,13 @@ class ApiKey(Base):
     rate_limit_rps: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_used_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=False), nullable=True
+        DateTime(timezone=True), nullable=True
     )
     expires_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=False), nullable=True
+        DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=False), default=utc_now, nullable=False
+        DateTime(timezone=True), default=utc_now, nullable=False
     )
 
     user: Mapped["User"] = relationship("User", back_populates="api_keys")
@@ -248,3 +235,6 @@ class ApiKey(Base):
 # ---------------------------------------------------------------------------
 # Advertiser & Campaign domain
 # ---------------------------------------------------------------------------
+
+
+

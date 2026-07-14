@@ -1,9 +1,11 @@
 """Security helpers: password hashing, JWT tokens, RBAC permission checks."""
 
+import hashlib
 import secrets
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional, cast
+from typing import Any, Dict, Optional, cast
 
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
@@ -54,6 +56,11 @@ def create_access_token(
     )
 
 
+def _hash_refresh_token(token: str) -> str:
+    """Return a secure hash of a raw refresh token for database lookup."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def create_refresh_token(
     subject: str,
     token_id: Optional[str] = None,
@@ -73,7 +80,7 @@ def create_refresh_token(
     token = cast(
         str, jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     )
-    token_hash = secrets.token_urlsafe(32)  # Store a hash in DB, not the raw token.
+    token_hash = _hash_refresh_token(token)  # Bind the DB record to the actual token.
     return token, token_hash
 
 
@@ -94,11 +101,12 @@ async def get_current_user(
 ) -> User:
     """Dependency: authenticate via Bearer access token and return the user."""
     if credentials is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        # Return demo user when no auth is provided
+        result = await db.execute(select(User).where(User.email == "demo@adpulse.com"))
+        user = result.scalar_one_or_none()
+        if user:
+            return user
+        raise HTTPException(status_code=401, detail="Demo user not found")
     payload = decode_token(credentials.credentials)
     if payload is None or payload.get("type") != "access":
         raise HTTPException(
@@ -210,3 +218,46 @@ async def validate_api_key(
     key_record.last_used_at = utc_now()
     await db.commit()
     return key_record
+
+
+def require_api_key_scope(scope: str):
+    """Return a dependency that validates the API key has the required scope."""
+
+    async def _check(key_record: ApiKey = Depends(validate_api_key)) -> ApiKey:
+        if scope not in (key_record.scopes or []):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"API key missing required scope: {scope}",
+            )
+        return key_record
+
+    _check.__name__ = f"require_api_key_scope_{scope.replace(':', '_')}"
+    return _check
+
+
+# Lightweight per-process, per-second rate limit state for API keys.
+# Maps "<api_key_id>:<unix_second>" -> request_count within that second.
+_api_key_rate_limit_state: Dict[str, int] = {}
+
+
+async def rate_limit_api_key(
+    key_record: ApiKey = Depends(require_api_key_scope("rtb:write")),
+) -> ApiKey:
+    """Enforce ApiKey.rate_limit_rps using a simple in-memory fixed window.
+
+    This is intentionally lightweight for the single-node SQLite reference
+    implementation. Production deployments should use Redis or a gateway.
+    """
+    now = time.time()
+    window = int(now)
+    key = f"{key_record.id}:{window}"
+    current = _api_key_rate_limit_state.get(key, 0) + 1
+    if current > key_record.rate_limit_rps:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="API key rate limit exceeded",
+        )
+    _api_key_rate_limit_state[key] = current
+    return key_record
+
+

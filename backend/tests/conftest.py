@@ -19,15 +19,7 @@ os.environ.setdefault(
 os.environ.setdefault("ENABLE_PUBLIC_REGISTRATION", "true")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-from app.api import (  # noqa: E402
-    abtest,
-    agent,
-    attribution,
-    auth,
-    dashboard,
-    rtb,
-    traffic,
-)
+from app.api import auth, dashboard  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.core.database import Base, get_db  # noqa: E402
 from app.core.response import register_exception_handlers  # noqa: E402
@@ -77,7 +69,7 @@ async def client():
     test_app.include_router(attribution.router)
     test_app.include_router(traffic.router)
     test_app.include_router(rtb.router)
-    test_app.include_router(abtest.router)
+    test_app.include_router(campaigns.router)
     test_app.include_router(dashboard.router)
     test_app.include_router(agent.router)
     test_app.dependency_overrides[get_db] = override_get_db
@@ -97,3 +89,4 @@ async def client():
 
     await test_engine.dispose()
     test_app.dependency_overrides.clear()
+

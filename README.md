@@ -1,229 +1,159 @@
-# AdPulse
+﻿# AdPulse SDK Platform
 
-AdPulse 是一个程序化广告投放平台的全栈演示项目，包含 RTB 竞价模拟、AI Agent 出价决策、A/B 测试、多触点归因分析和流量质量检测等模块。
-
-> 本项目仅用于学习和技术交流，数据均为模拟生成，不涉及真实投放。
+一个面向发布商的广告 SDK 管理平台，支持 Mediation、In-App Bidding、流量质量分析和归因追踪。
 
 ---
 
-## 功能模块
+## 快速启动
 
-- **Dashboard**：核心指标看板，展示 KPI、预算消耗、竞价趋势、A/B 测试与流量质量概览。
-- **RTB 竞价引擎**：模拟单次/批量广告拍卖，支持 First Price / Second Price 结算，展示竞价日志与胜出 DSP。
-- **Agent Loop**：可视化 ReAct 决策链路（Think → Act → Observe），支持策略配置与记忆回看。
-- **A/B 测试**：创建实验、自动分流、统计显著性检验、置信区间与异常检测。
-- **多触点归因**：支持 First Touch、Last Touch、Linear、Time Decay、Position Based、Shapley 近似 6 种归因模型。
-- **流量质量检测**：基于 CTR/CVR、跳出率、停留时长、互动深度等指标输出质量等级与作弊告警。
-- **iPinYou 真实数据接入**：导入 iPinYou RTB Dataset 竞价/曝光/点击/转化日志，展示日趋势、消耗与竞价明细。
-
----
-
-## 技术栈
-
-### 后端
-- Python 3.11+
-- FastAPI + Pydantic v2
-- SQLAlchemy 2.0（async）+ SQLite（aiosqlite）
-- NumPy / SciPy / pandas / statsmodels
-- pytest + pytest-asyncio + httpx
-- black + isort + flake8 + mypy
-
-### 前端
-- React 18 + TypeScript
-- Vite
-- Tailwind CSS
-- React Router v6
-- Recharts
-- Lucide React
-
----
-
-## 项目结构
-
-```
-adpulse/
-├── backend/
-│   ├── app/
-│   │   ├── agent/            # ReAct 出价 Agent
-│   │   ├── api/              # FastAPI 路由
-│   │   ├── core/             # 配置、数据库、seed 数据
-│   │   ├── models/           # SQLAlchemy 模型（按领域拆分）
-│   │   ├── schemas/          # Pydantic Schema
-│   │   └── services/         # 业务引擎
-│   ├── tests/                # 集成测试
-│   ├── requirements.txt
-│   └── pytest.ini
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   ├── pages/
-│   │   └── utils/
-│   ├── package.json
-│   ├── tailwind.config.js
-│   └── vite.config.ts
-└── README.md
-```
-
----
-
-## 快速开始
-
-### 1. 克隆仓库
-
-```bash
-git clone https://github.com/hutao-7777/ADPULSE.git
-cd ADPULSE
-```
-
-### 2. 启动后端
-
+### 1. 后端
 ```bash
 cd backend
 python -m venv venv
-source venv/bin/activate      # Windows: venv\Scripts\activate
+venv\Scripts\activate   # Windows
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+
+# 启动（首次运行自动创建 SQLite 数据库 + 种子数据）
+$env:SECRET_KEY="adpulse-local-dev-secret-key-min-32-characters"
+$env:ENABLE_PUBLIC_REGISTRATION="true"
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+首次启动自动写入演示数据：
+- 演示用户：demo@adpulse.com（免密登录）
+- 演示媒体主 Demo Media + 2 个应用、3 个广告位、3 个广告网络
+- 演示事件数据（曝光、点击、转化）
 
-后端默认运行在 http://localhost:8000，首次启动会自动创建 SQLite 数据库并写入 seed 数据。
-
-### 3. 启动前端
-
+### 2. 前端（静态构建）
 ```bash
 cd frontend
 npm install
-npm run dev
-```
 
-前端默认运行在 http://localhost:5173。
+$env:VITE_API_URL="http://localhost:8000"
+npx vite build --minify false
+
+python ..\working_server.py
+```
+浏览器打开 http://localhost:5173 即可使用。
+
+### 3. SDK Demo
+打开 sdk/demo.html 查看 SDK 集成效果。
 
 ---
 
-## 运行测试
-
-```bash
-cd backend
-source venv/bin/activate      # Windows: venv\Scripts\activate
-pytest tests/test_api.py -v
+## SDK 集成
+```html
+<script src="https://cdn.adpulse.com/sdk/adpulse.js"></script>
+<script>AdPulse.init("PUBLISHER_KEY");</script>
+<div data-adpulse data-slot="AD_UNIT_ID"></div>
+<script>AdPulse.showAd("#container", { slot: "AD_UNIT_ID" });</script>
 ```
+详见 sdk/README.md。
 
-当前包含 9 个集成测试：认证、RTB 拍卖、A/B 测试流程、Agent Loop、归因流程等。
+---
+
+## 架构
+```
+用户浏览器 -> Web SDK -> Backend (FastAPI, :8000) -> SQLite
+                                               -> Frontend (React, :5173)
+```
+SDK 请求路径：
+- POST /v1/bid - 竞价
+- POST /v1/events/* - 事件上报
+- GET /v1/sdk/config/* - SDK 配置
 
 ---
 
 ## API 概览
 
-| 模块 | 前缀 | 说明 |
+### SDK 端接口 (/v1)
+| 方法 | 路径 | 说明 |
 |------|------|------|
-| Auth | `/api/auth` | 登录、刷新、API Key、注册开关 |
-| Dashboard | `/api/dashboard` | 聚合指标与趋势 |
-| RTB | `/api/rtb` | 拍卖、竞价日志 |
-| A/B Test | `/api/abtests` | 实验创建、结果、异常检测 |
-| Agent | `/api/agent` | Agent 运行、记忆、策略 |
-| Attribution | `/api/attribution` | 触点旅程、归因计算、模型对比 |
-| Traffic | `/api/traffic` | 流量质量评估、趋势、告警 |
+| POST | /v1/bid | In-App Bidding 竞价 |
+| POST | /v1/events/impression | 曝光上报 |
+| POST | /v1/events/click | 点击上报 |
+| POST | /v1/events/conversion | 转化上报 |
+| POST | /v1/events/batch | 批量事件上报 |
+| GET | /v1/sdk/config/{id} | SDK 配置 |
+| POST | /v1/attribution/match/{id} | 单个转化归因 |
+| POST | /v1/attribution/match-all | 批量归因 |
+| POST | /v1/attribution/create-and-match | 创建+归因 |
+| POST | /v1/attribution/compare/{id} | 归因算法对比 |
+| GET | /v1/attribution/report | 归因报告 |
 
-### API 约定
+### 管理端接口 (/api)
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET/POST | /api/publishers | 媒体主 CRUD |
+| GET/POST | /api/publishers/{id}/apps | 应用管理 |
+| GET/POST | /api/ad-units | 广告位 CRUD |
+| GET/POST | /api/ad-units/{id}/sources | Mediation 源配置 |
+| PATCH | /api/ad-units/{id}/waterfall | Waterfall 排序 |
+| PATCH | /api/ad-units/{id}/bidding-config | Bidding 配置 |
+| PATCH/DELETE | /api/ad-units/sources/{id} | 广告源操作 |
+| GET | /api/dashboard/summary | KPI 概览 |
+| GET | /api/dashboard/trend | KPI 趋势 |
+| GET | /api/report/summary | 报表导出 |
+| POST | /api/traffic/assess/{id} | 流量质量评估 |
+| GET | /api/traffic/ad-unit/{id}/trend | 质量趋势 |
+| GET | /api/traffic/ad-unit/{id}/alerts | 质量告警 |
+| GET/POST/DELETE | /api/auth/api-keys | API 密钥管理 |
 
-- 所有接口统一返回 `{code, message, data}` 结构。
-- ORM 主键使用 `uuid.UUID`，`datetime` 字段统一为 UTC 时间。
-- RTB 金额按**单次展示**存储；CPM 与展示价通过 `cpm / 1000` 和 `price * 1000` 转换。
-- A/B 测试分流使用一致性哈希，非实验流量进入 `control`。
-- Agent 遵循 ReAct 决策链路：`think -> act -> observe`。
-
-详细接口定义请参考 `backend/app/api/` 与 `backend/app/schemas/`。
-
----
-
-## 数据接入
-
-### iPinYou RTB Dataset
-
-项目已集成 [iPinYou RTB Dataset](https://github.com/wnzhang/make-ipinyou-data) 导入能力，可展示真实竞价、曝光、点击与转化数据。
-
-#### 导入步骤
-
-1. 克隆数据集：
-
-```bash
-git clone https://github.com/wnzhang/make-ipinyou-data.git
-```
-
-2. 下载原始数据并生成广告主目录：
-
-从 [UCL 下载页](http://bunwell.cs.ucl.ac.uk/ipinyou.contest.dataset.zip) 下载 `ipinyou.contest.dataset.zip`，解压后得到 `ipinyou.contest.dataset` 文件夹，将其放到 `make-ipinyou-data/original-data/` 下：
-
-```text
-make-ipinyou-data/
-└── original-data/
-    └── ipinyou.contest.dataset/   ← 原始数据文件夹
-        ├── training2nd/
-        ├── training3rd/
-        ├── testing2nd/
-        └── testing3rd/
-```
-
-然后在 `make-ipinyou-data` 目录执行 `make all`（Windows 建议使用 WSL 或 Git Bash）：
-
-```bash
-cd make-ipinyou-data
-make all
-```
-
-处理完成后会出现广告主子目录，如 `1458/`、`2261/` 等。
-
-3. 进入 AdPulse 后端环境并执行导入脚本：
-
-```bash
-cd backend
-source venv/bin/activate      # Windows: venv\Scripts\activate
-python scripts/import_ipinyou.py \
-  --data-dir ../make-ipinyou-data \
-  --advertiser 1458 \
-  --limit 50000
-```
-
-参数说明：
-- `--data-dir`：make-ipinyou-data 根目录（处理后包含 `1458/` 等子目录）
-- `--advertiser`：广告主 ID，如 `1458`、`2261`、`2997` 等
-- `--limit`：导入记录条数上限，默认 50000
-- `--format`：数据集格式，默认为 `formalized`（对应 `make-ipinyou-data` 输出）；如果你的数据是 `bid/imp/click/conv.log.txt` 格式，可设为 `raw`
-
-3. 导入完成后，打开前端页面「iPinYou 数据」即可查看：
-- 日曝光 / 点击趋势折线图
-- 日消耗柱状图
-- 总曝光、总点击、CTR、总消耗等核心指标卡片
-- 最近 20 条竞价记录明细
-
-#### 数据规模示例
-
-已导入 1458 广告主 5 万条竞价记录，系统会自动关联对应曝光、点击与转化事件，并按天聚合统计。
+所有接口返回格式：{code: 0, message: "success", data: ...}
 
 ---
 
-## 环境变量
-
-后端通过 `.env` 文件配置，示例：
-
-```env
-DATABASE_URL=sqlite+aiosqlite:///./adpulse.db
-SECRET_KEY=your-production-secret-key
-CORS_ORIGINS=http://localhost:5173,http://localhost:3000
-ENABLE_PUBLIC_REGISTRATION=false
-PROJECT_NAME=AdPulse
-VERSION=1.0.0
-DEBUG=false
+## 目录结构
 ```
-
-> **安全提示**
-> - `SECRET_KEY` 必须设置为非默认值，否则应用启动时会抛出错误。
-> - `CORS_ORIGINS` 不支持通配符 `*`，请使用逗号分隔的确切来源列表。
-> - 公开注册默认关闭，可通过 `ENABLE_PUBLIC_REGISTRATION=true` 开启。
+adpulse/
+├── sdk/                    # 客户端 SDK
+│   ├── adpulse.js          # Web SDK 核心
+│   ├── pixel.js            # 追踪像素
+│   ├── demo.html           # 集成演示
+│   └── README.md           # SDK 文档
+├── backend/app/
+│   ├── api/                # FastAPI 路由
+│   │   ├── publishers.py   # 媒体主 + 应用 CRUD
+│   │   ├── ad_units.py     # 广告位 + Mediation
+│   │   ├── events.py       # 事件上报
+│   │   ├── bidding.py      # In-App Bidding
+│   │   ├── sdk_config.py   # SDK 配置
+│   │   ├── attribution.py  # 归因匹配
+│   │   ├── dashboard.py    # KPI 看板
+│   │   ├── traffic.py      # 流量质量分析
+│   │   ├── report.py       # 报表
+│   │   └── auth.py         # 认证 + API Key
+│   ├── models/             # SQLAlchemy 模型
+│   ├── services/           # 业务逻辑
+│   ├── core/               # 配置/数据库/种子数据
+│   └── main.py             # 入口
+├── frontend/src/
+│   ├── pages/              # 页面组件
+│   ├── components/         # 通用组件
+│   ├── stores/             # Zustand 状态管理
+│   └── lib/                # API 客户端
+├── working_server.py       # 前端静态文件服务器
+├── docker-compose.yml
+└── README.md
+```
 
 ---
 
-## 说明
+## 技术栈
+| 层 | 技术 |
+|----|------|
+| 后端 | Python 3.11+, FastAPI, SQLAlchemy 2.0 (async) |
+| 数据库 | SQLite |
+| 前端 | React 18, TypeScript, Vite |
+| 样式 | Tailwind CSS + Recharts |
+| SDK | 原生 JavaScript（零依赖） |
 
-- `.gitignore` 已排除 `venv/`、`node_modules/`、`.env`、`*.db`、`backend/uploads/` 等。
-- 部分页面在未连接后端时会使用 mock 数据展示 UI。
-- 本项目仅供学习和技术交流使用。
+## 模型关系
+```
+Publisher -> App -> AdUnit -> AdSource -> AdNetwork
+                   Mediation Config (Waterfall + Bidding)
+ImpressionEvent / ClickEvent -> ConversionEvent -> InstallMatcher -> AttributionResult
+```
+
+## 认证说明
+本地开发模式已绕过登录，所有页面无需登录即可访问。
+后端自动返回 demo@adpulse.com 用户身份。

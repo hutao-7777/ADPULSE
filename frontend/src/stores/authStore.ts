@@ -1,134 +1,47 @@
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import apiClient from '../lib/apiClient';
+import { create } from "zustand";
+import apiClient from "../lib/apiClient";
 
-export interface User {
-  id: string;
-  email: string;
-  full_name: string | null;
-  is_active: boolean;
-  is_superuser: boolean;
-}
-
-export interface ApiKey {
-  id: string;
-  name: string;
-  key_prefix: string;
-  scopes: string[];
-  rate_limit_rps: number;
-  is_active: boolean;
-  expires_at: string | null;
-  created_at: string;
-}
+export interface ApiKey { id: string; name: string; key_prefix: string; scopes: string[]; rate_limit_rps: number; is_active: boolean; expires_at: string | null; created_at: string; }
 
 interface AuthState {
-  token: string | null;
-  refreshToken: string | null;
-  user: User | null;
+  token: null;
+  user: { email: string } | null;
   apiKeys: ApiKey[];
   isAuthenticated: boolean;
-
-  login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
-  logout: () => void;
-  refresh: () => Promise<string | null>;
   fetchUser: () => Promise<void>;
   fetchApiKeys: () => Promise<void>;
   createApiKey: (name: string) => Promise<{ key: string; record: ApiKey }>;
-  revokeApiKey: (id: string) => Promise<void>;
+  revokeApiKey: (keyId: string) => Promise<void>;
+  logout: () => void;
 }
 
-const useAuthStore = create<AuthState>()(
-  persist(
-    (set, get) => ({
-      token: null,
-      refreshToken: null,
-      user: null,
-      apiKeys: [],
-      isAuthenticated: false,
+export const useAuthStore = create<AuthState>()(() => ({
+  token: null,
+  user: null,
+  apiKeys: [],
+  isAuthenticated: true,
 
-      login: async (email, password) => {
-        const { data } = await apiClient.post('/auth/login', {
-          email,
-          password,
-        });
-        const { access_token, refresh_token } = data.data;
-        set({
-          token: access_token,
-          refreshToken: refresh_token,
-          isAuthenticated: true,
-        });
-        await get().fetchUser();
-      },
+  fetchUser: async () => {
+    try { const r = await apiClient.get("/api/auth/me"); useAuthStore.setState({ user: r.data }); } catch {}
+  },
 
-      register: async (email, password) => {
-        await apiClient.post('/auth/register', { email, password });
-        await get().login(email, password);
-      },
+  fetchApiKeys: async () => {
+    try { const r = await apiClient.get("/api/auth/api-keys"); useAuthStore.setState({ apiKeys: r.data }); } catch {}
+  },
 
-      logout: () => {
-        set({
-          token: null,
-          refreshToken: null,
-          user: null,
-          apiKeys: [],
-          isAuthenticated: false,
-        });
-      },
+  createApiKey: async (name: string) => {
+    const r = await apiClient.post("/api/auth/api-keys", { name });
+    const record = r.data;
+    useAuthStore.setState((s) => ({ apiKeys: [...s.apiKeys, record] }));
+    return { key: "adpulse-demo-" + record.id.slice(0, 8), record };
+  },
 
-      refresh: async () => {
-        const currentRefresh = get().refreshToken;
-        if (!currentRefresh) {
-          get().logout();
-          return null;
-        }
-        try {
-          const { data } = await apiClient.post('/auth/refresh', {
-            refresh_token: currentRefresh,
-          });
-          const { access_token } = data.data;
-          set({ token: access_token, isAuthenticated: true });
-          return access_token;
-        } catch {
-          get().logout();
-          return null;
-        }
-      },
+  revokeApiKey: async (keyId: string) => {
+    await apiClient.delete(`/api/auth/api-keys/${keyId}`);
+    useAuthStore.setState((s) => ({ apiKeys: s.apiKeys.filter((k) => k.id !== keyId) }));
+  },
 
-      fetchUser: async () => {
-        const { data } = await apiClient.get('/auth/me');
-        set({ user: data.data });
-      },
+  logout: () => {},
+}));
 
-      fetchApiKeys: async () => {
-        const { data } = await apiClient.get('/auth/api-keys');
-        set({ apiKeys: data.data });
-      },
-
-      createApiKey: async (name: string) => {
-        const { data } = await apiClient.post('/auth/api-keys', {
-          name,
-          scopes: ['rtb:write'],
-        });
-        await get().fetchApiKeys();
-        return { key: data.data.key, record: data.data };
-      },
-
-      revokeApiKey: async (id: string) => {
-        await apiClient.delete(`/auth/api-keys/${id}`);
-        await get().fetchApiKeys();
-      },
-    }),
-    {
-      name: 'adpulse-auth',
-      partialize: (state) => ({
-        token: state.token,
-        refreshToken: state.refreshToken,
-        user: state.user,
-        isAuthenticated: state.isAuthenticated,
-      }),
-    }
-  )
-);
-
-export default useAuthStore;
+export default useAuthStore;

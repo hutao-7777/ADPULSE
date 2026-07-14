@@ -34,3 +34,6 @@ yarn-error.log*
 *.swo
 .DS_Store
 make-ipinyou-data/
+
+# Recovery files
+*.recovered

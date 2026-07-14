@@ -21,7 +21,7 @@ interface DataSourceState {
 export const useDataSourceStore = create<DataSourceState>()(
   persist(
     (set, get) => ({
-      activeSource: 'mock',
+      activeSource: 'all',
       availableSources: [{ name: 'mock', label: 'Mock 数据', record_count: 0 }],
       isLoading: false,
 
@@ -31,7 +31,7 @@ export const useDataSourceStore = create<DataSourceState>()(
         set({ isLoading: true });
         try {
           const res = await apiClient.get('/dashboard/available-sources');
-          const sources = res.data.data?.sources ?? res.data.sources ?? [];
+          const sources = res.data?.sources ?? [];
           set({ availableSources: sources, isLoading: false });
         } catch {
           set({ isLoading: false });

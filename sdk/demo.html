@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AdPulse SDK Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #1e293b; line-height: 1.6; }
+    header { background: linear-gradient(135deg, #1e40af, #3b82f6); color: white; padding: 40px 20px; text-align: center; }
+    header h1 { font-size: 2rem; margin-bottom: 8px; }
+    header p { opacity: 0.9; font-size: 1rem; }
+    .container { max-width: 900px; margin: 0 auto; padding: 24px 20px; }
+    .card { background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 20px; }
+    .card h2 { font-size: 1.25rem; margin-bottom: 16px; color: #0f172a; }
+    .ad-container { background: #f1f5f9; border: 2px dashed #94a3b8; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin: 16px 0; overflow: hidden; }
+    .ad-container.banner { width: 100%; min-height: 90px; }
+    .ad-container.rectangle { width: 300px; height: 250px; margin: 16px auto; }
+    .code-block { background: #0f172a; color: #e2e8f0; border-radius: 8px; padding: 16px; font-family: "SF Mono", Monaco, monospace; font-size: 13px; overflow-x: auto; margin: 12px 0; }
+    .btn { display: inline-block; background: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; transition: background 0.2s; }
+    .btn:hover { background: #2563eb; }
+    .btn:disabled { background: #94a3b8; cursor: not-allowed; }
+    .event-log { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+    .event-log .entry { padding: 4px 0; border-bottom: 1px solid #f1f5f9; }
+    .event-log .entry:last-child { border-bottom: none; }
+    .event-log .time { color: #64748b; }
+    .event-log .type { color: #3b82f6; font-weight: bold; }
+    .event-log .data { color: #334155; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    .badge.imp { background: #dbeafe; color: #1d4ed8; }
+    .badge.clk { background: #dcfce7; color: #15803d; }
+    .badge.conv { background: #fef3c7; color: #b45309; }
+    .flex-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: start; }
+    .ad-label { font-size: 11px; color: #94a3b8; text-align: center; margin-top: 4px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>AdPulse SDK Demo</h1>
+  <p>Complete integration example — impressions, clicks, events, attribution</p>
+</header>
+
+<div class="container">
+
+  <!-- Step 1: Setup -->
+  <div class="card">
+    <h2>1. Init SDK</h2>
+    <p style="color:#64748b;margin-bottom:12px;">Include the script and initialize with your publisher key.</p>
+    <div class="code-block">&lt;script src="https://cdn.adpulse.com/sdk/adpulse.js"&gt;&lt;/script&gt;
+&lt;script&gt;
+  AdPulse.init('PUBLISHER_KEY', {
+    baseUrl: 'http://localhost:8000',
+  });
+&lt;/script&gt;</div>
+    <button id="initBtn" class="btn" onclick="initSDK()">Init AdPulse SDK</button>
+    <span id="initStatus" style="margin-left:12px;font-size:14px;color:#64748b;"></span>
+  </div>
+
+  <!-- Step 2: Auto-scan ad placeholders -->
+  <div class="card">
+    <h2>2. Auto-scanned Ad Placements</h2>
+    <p style="color:#64748b;margin-bottom:12px;">Ad units with <code>data-adpulse</code> and <code>data-slot</code> attributes are auto-detected.</p>
+
+    <div class="flex-row">
+      <div>
+        <div class="ad-container banner" data-adpulse data-slot="ad_unit_banner_demo" style="width:100%;max-width:728px;"></div>
+        <div class="ad-label">Banner 728x90 (data-adpulse auto-scan)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3: Imperative ad loading -->
+  <div class="card">
+    <h2>3. Imperative API</h2>
+    <p style="color:#64748b;margin-bottom:12px;">Load ads programmatically with <code>AdPulse.showAd()</code>.</p>
+    <button class="btn" onclick="loadAdImperative()">Load Ad via API</button>
+    <div class="ad-container rectangle" id="imperativeAdContainer"></div>
+    <div class="ad-label">300x250 loaded via showAd()</div>
+  </div>
+
+  <!-- Step 4: Event tracking -->
+  <div class="card">
+    <h2>4. Event Tracking</h2>
+    <p style="color:#64748b;margin-bottom:12px;">Track post-install events for attribution.</p>
+    <button class="btn" onclick="trackPurchase()">Track Purchase ($9.99)</button>
+    <button class="btn" onclick="trackSignup()">Track Signup</button>
+    <button class="btn" onclick="trackLevelUp()">Track Level Up</button>
+  </div>
+
+  <!-- Step 5: Attribution -->
+  <div class="card">
+    <h2>5. Attribution Matching</h2>
+    <p style="color:#64748b;margin-bottom:12px;">Create a conversion event and trigger attribution matching.</p>
+    <button class="btn" onclick="createConversion()">Create Conversion (API)</button>
+    <div id="attributionResult" style="margin-top:12px;font-size:13px;color:#334155;"></div>
+  </div>
+
+  <!-- Event log -->
+  <div class="card">
+    <h2>Event Log</h2>
+    <p style="color:#64748b;margin-bottom:12px;">Real-time SDK events captured via <code>navigator.sendBeacon</code>.</p>
+    <div class="event-log" id="eventLog">
+      <div class="entry"><span class="time">--:--:--</span> SDK ready — waiting for events...</div>
+    </div>
+  </div>
+
+</div>
+
+<script src="../sdk/adpulse.js"></script>
+<script>
+  const LOG = document.getElementById('eventLog');
+  const DEVICE_ID = 'demo-' + Math.random().toString(36).slice(2, 10);
+
+  function log(type, data) {
+    const entry = document.createElement('div');
+    entry.className = 'entry';
+    const time = new Date().toLocaleTimeString();
+    const badge = type === 'impression' ? 'imp' : type === 'click' ? 'clk' : 'conv';
+    entry.innerHTML = `<span class="time">${time}</span> <span class="badge ${badge}">${type}</span> <span class="data">${JSON.stringify(data)}</span>`;
+    LOG.appendChild(entry);
+    LOG.scrollTop = LOG.scrollHeight;
+  }
+
+  // Hook into SDK events (internal — for demo purposes)
+  const origSendBeacon = navigator.sendBeacon.bind(navigator);
+  navigator.sendBeacon = function(url, data) {
+    try {
+      const parsed = JSON.parse(new TextDecoder().decode(data));
+      if (Array.isArray(parsed)) {
+        parsed.forEach(function(ev) { log(ev.event || 'event', ev); });
+      }
+    } catch(e) {}
+    return origSendBeacon(url, data);
+  };
+
+  function initSDK() {
+    if (window.AdPulse) {
+      AdPulse.init('demo_publisher_key', {
+        baseUrl: 'http://localhost:8000',
+      });
+      document.getElementById('initStatus').textContent = 'SDK initialized successfully';
+      document.getElementById('initBtn').disabled = true;
+      document.getElementById('initBtn').textContent = 'SDK Active';
+      log('info', { message: 'AdPulse SDK v' + AdPulse.VERSION + ' initialized' });
+    } else {
+      document.getElementById('initStatus').textContent = 'SDK not loaded — check script path';
+    }
+  }
+
+  function loadAdImperative() {
+    if (!window.AdPulse) { alert('Init SDK first'); return; }
+    AdPulse.showAd('#imperativeAdContainer', { slot: 'ad_unit_rect_demo' });
+    log('info', { message: 'Imperative ad load requested' });
+  }
+
+  function trackPurchase() {
+    if (!window.AdPulse) { alert('Init SDK first'); return; }
+    AdPulse.trackEvent('purchase', { value: 9.99, currency: 'USD' });
+    log('conv', { event_type: 'purchase', value: 9.99 });
+  }
+
+  function trackSignup() {
+    if (!window.AdPulse) { alert('Init SDK first'); return; }
+    AdPulse.trackEvent('signup', { value: 0 });
+    log('conv', { event_type: 'signup' });
+  }
+
+  function trackLevelUp() {
+    if (!window.AdPulse) { alert('Init SDK first'); return; }
+    AdPulse.trackEvent('level_up', { value: 0 });
+    log('conv', { event_type: 'level_up' });
+  }
+
+  function createConversion() {
+    fetch('http://localhost:8000/api/attribution/create-and-match', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (localStorage.getItem('adpulse-auth-token') || '') },
+      body: JSON.stringify({
+        device_id: DEVICE_ID,
+        event_type: 'install',
+        event_value: 1.0,
+        currency: 'USD',
+      }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var el = document.getElementById('attributionResult');
+      el.innerHTML = '<strong>Attribution Result:</strong> conversion=' + data.conversion_id.slice(0,12) +
+        '...<br>attributed_network: <strong>' + (data.attributed_network || 'none') + '</strong>';
+      log('conv', { conversion_id: data.conversion_id, attributed_to: data.attributed_network });
+    })
+    .catch(function(err) {
+      document.getElementById('attributionResult').textContent = 'Error: ' + err.message;
+    });
+  }
+
+  // Auto-init on page load
+  window.addEventListener('DOMContentLoaded', function() {
+    // SDK will auto-scan [data-adpulse] elements
+    log('info', { message: 'Demo page loaded. Click "Init SDK" to start.' });
+  });
+</script>
+</body>
+</html>

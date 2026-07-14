@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.security import (
+    _hash_refresh_token,
     create_access_token,
     create_refresh_token,
     decode_token,
@@ -93,14 +94,14 @@ class AuthService:
                 detail="User not found or inactive",
             )
 
-        # In a real system we would also compare the raw token or its hash.
-        # Here we rely on the signed JWT plus a DB existence check.
+        # Look up the exact DB record bound to this refresh token hash.
+        token_hash = _hash_refresh_token(refresh_token)
         result = await db.execute(
             select(RefreshToken)
             .where(RefreshToken.user_id == user.id)
+            .where(RefreshToken.token_hash == token_hash)
             .where(RefreshToken.revoked_at.is_(None))
             .where(RefreshToken.expires_at > utc_now())
-            .order_by(RefreshToken.created_at.desc())
         )
         active_token = result.scalar_one_or_none()
         if active_token is None:

@@ -1,19 +1,17 @@
-"""Traffic quality scoring and fraud detection engine."""
+"""Traffic quality scoring and fraud detection engine �� SDK platform edition."""
 
-import random
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import FraudAlert, TrafficQualityScore
-from app.models.base import utc_now
+from app.models import ClickEvent, ConversionEvent, FraudAlert, ImpressionEvent, TrafficQualityScore
 
 
 class TrafficQualityEngine:
-    """Evaluate traffic quality and detect anomalous / fraudulent patterns."""
+    """Evaluate traffic quality and detect anomalous/fraudulent patterns per ad unit."""
 
     GRADE_PREMIUM = "premium"
     GRADE_STANDARD = "standard"
@@ -24,7 +22,6 @@ class TrafficQualityEngine:
         return max(low, min(high, value))
 
     def _score_ctr(self, ctr: float) -> float:
-        """Benchmark CTR = 0.02, healthy range [0.01, 0.05]."""
         if 0.01 <= ctr <= 0.05:
             return 100.0
         if ctr < 0.01:
@@ -32,7 +29,6 @@ class TrafficQualityEngine:
         return self._clamp(100.0 - (ctr - 0.05) / 0.05 * 100.0)
 
     def _score_cvr(self, cvr: float) -> float:
-        """Benchmark CVR = 0.10, healthy range [0.05, 0.20]."""
         if 0.05 <= cvr <= 0.20:
             return 100.0
         if cvr < 0.05:
@@ -53,51 +49,8 @@ class TrafficQualityEngine:
             return 0.0
         return (avg_dwell_sec - 2.0) / 28.0 * 100.0
 
-    def _score_interaction(self, interaction_rate: float) -> float:
-        target = 0.30
-        return self._clamp(interaction_rate / target * 100.0)
-
-    def _detect_flags(self, raw_metrics: Dict) -> List[str]:
-        flags: List[str] = []
-        impressions = raw_metrics.get("impressions", 0)
-        clicks = raw_metrics.get("clicks", 0)
-        conversions = raw_metrics.get("conversions", 0)
-        ctr = clicks / impressions if impressions > 0 else 0.0
-        cvr = conversions / clicks if clicks > 0 else 0.0
-
-        click_timestamps = raw_metrics.get("click_timestamps", [])
-        if click_timestamps and len(click_timestamps) >= 4:
-            sorted_ts = sorted(click_timestamps)
-            for i in range(len(sorted_ts)):
-                window_end = sorted_ts[i]
-                count = sum(
-                    1 for ts in sorted_ts if window_end - 60 <= ts <= window_end
-                )
-                if count > 3:
-                    flags.append("suspect_bot")
-                    break
-
-        ip_distribution = raw_metrics.get("ip_distribution", {})
-        if impressions > 0 and ip_distribution:
-            total_ip_hits = sum(ip_distribution.values())
-            for ip, count in ip_distribution.items():
-                share = count / total_ip_hits if total_ip_hits > 0 else 0.0
-                # A single IP contributing >40% of traffic is suspicious.
-                if share > 0.4 and count > 10:
-                    flags.append("low_quality_ip")
-                    break
-
-        if ctr > 0.20 or ctr < 0.0001:
-            flags.append("ctr_anomaly")
-
-        if cvr > 0.50:
-            flags.append("bot_suspect")
-
-        night_ratio = raw_metrics.get("night_ratio", 0.0)
-        if night_ratio > 0.5:
-            flags.append("night_spike")
-
-        return list(set(flags))
+    def _score_interaction(self, rate: float) -> float:
+        return self._clamp(rate / 0.30 * 100.0)
 
     def _map_grade(self, score: float) -> str:
         if score >= 90:
@@ -108,257 +61,182 @@ class TrafficQualityEngine:
             return self.GRADE_LOW
         return self.GRADE_FRAUD
 
-    def assess_traffic(
-        self,
-        campaign_id: str | uuid.UUID,
-        date: datetime,
-        raw_metrics: Dict,
+    async def assess_from_events(
+        self, db: AsyncSession, ad_unit_id: uuid.UUID, since: Optional[datetime] = None
     ) -> Dict:
-        """Compute traffic quality score from raw metrics."""
-        impressions = raw_metrics.get("impressions", 0)
-        clicks = raw_metrics.get("clicks", 0)
-        conversions = raw_metrics.get("conversions", 0)
-        bounce_count = raw_metrics.get("bounce_count", 0)
-        total_dwell_sec = raw_metrics.get("total_dwell_sec", 0.0)
-        interaction_events = raw_metrics.get("interaction_events", 0)
-        unique_users = raw_metrics.get("unique_users", 1)
+        """Pull impression/click/conv data from events and compute quality scores."""
+        if since is None:
+            since = datetime.now(timezone.utc) - timedelta(days=1)
 
-        ctr = clicks / impressions if impressions > 0 else 0.0
-        cvr = conversions / clicks if clicks > 0 else 0.0
-        bounce_rate = bounce_count / clicks if clicks > 0 else 0.0
-        avg_dwell = total_dwell_sec / unique_users if unique_users > 0 else 0.0
-        interaction_rate = interaction_events / impressions if impressions > 0 else 0.0
+        imp_count = (await db.execute(
+            select(func.count(ImpressionEvent.id))
+            .where(ImpressionEvent.ad_unit_id == ad_unit_id, ImpressionEvent.created_at >= since)
+        )).scalar() or 0
+
+        clk_count = (await db.execute(
+            select(func.count(ClickEvent.id))
+            .where(ClickEvent.ad_unit_id == ad_unit_id, ClickEvent.created_at >= since)
+        )).scalar() or 0
+
+        conv_count = (await db.execute(
+            select(func.count(ConversionEvent.id))
+            .where(ConversionEvent.ad_unit_id == ad_unit_id, ConversionEvent.created_at >= since)
+        )).scalar() or 0
+
+        unique_devices = (await db.execute(
+            select(func.count(func.distinct(ImpressionEvent.device_id)))
+            .where(ImpressionEvent.ad_unit_id == ad_unit_id, ImpressionEvent.created_at >= since)
+        )).scalar() or 1
+
+        ctr = clk_count / imp_count if imp_count > 0 else 0.0
+        cvr = conv_count / clk_count if clk_count > 0 else 0.0
 
         ctr_score = self._score_ctr(ctr)
         cvr_score = self._score_cvr(cvr)
-        bounce_score = self._score_bounce(bounce_rate)
-        dwell_score = self._score_dwell(avg_dwell)
-        interaction_score = self._score_interaction(interaction_rate)
+        bounce_score = self._score_bounce(0.5)  # default �� needs real bounce data
+        dwell_score = self._score_dwell(20.0)   # default �� needs real dwell data
+        interact_score = self._score_interaction(0.15)
 
-        quality_score = (
-            ctr_score * 0.2
-            + cvr_score * 0.2
-            + bounce_score * 0.2
-            + dwell_score * 0.2
-            + interaction_score * 0.2
+        quality = (
+            ctr_score * 0.25 + cvr_score * 0.25 +
+            bounce_score * 0.2 + dwell_score * 0.15 + interact_score * 0.15
         )
-        quality_score = round(self._clamp(quality_score), 2)
+        quality = round(self._clamp(quality), 2)
+        grade = self._map_grade(quality)
+        flags = self._detect_flags(imp_count, clk_count, conv_count, ctr, cvr)
 
-        flags = self._detect_flags(raw_metrics)
-        grade = self._map_grade(quality_score)
-        anomaly_count = len(flags)
-
-        return {
-            "campaign_id": str(campaign_id),
-            "date": date.isoformat() if isinstance(date, datetime) else str(date),
-            "geo": raw_metrics.get("geo"),
-            "device_type": raw_metrics.get("device_type"),
-            "quality_score": quality_score,
+        result = {
+            "ad_unit_id": str(ad_unit_id),
+            "date": since.strftime("%Y-%m-%d"),
+            "impressions": imp_count,
+            "clicks": clk_count,
+            "conversions": conv_count,
+            "unique_devices": unique_devices,
+            "ctr": round(ctr, 6),
+            "cvr": round(cvr, 6),
+            "quality_score": quality,
             "grade": grade,
             "ctr_score": round(ctr_score, 2),
             "cvr_score": round(cvr_score, 2),
             "bounce_score": round(bounce_score, 2),
             "dwell_score": round(dwell_score, 2),
-            "interaction_score": round(interaction_score, 2),
+            "interaction_score": round(interact_score, 2),
             "flags": flags,
-            "anomaly_count": anomaly_count,
-            "metrics": {
-                "ctr": round(ctr, 6),
-                "cvr": round(cvr, 6),
-                "bounce_rate": round(bounce_rate, 6),
-                "avg_dwell_sec": round(avg_dwell, 2),
-                "interaction_rate": round(interaction_rate, 6),
-            },
         }
 
-    async def save_assessment(
-        self,
-        db: AsyncSession,
-        campaign_id: str | uuid.UUID,
-        date: datetime,
-        raw_metrics: Dict,
-    ) -> TrafficQualityScore:
-        """Assess traffic and persist the quality score record."""
-        result = self.assess_traffic(campaign_id, date, raw_metrics)
+        # Persist
         score = TrafficQualityScore(
-            campaign_id=campaign_id,
-            date=date.replace(hour=0, minute=0, second=0, microsecond=0),
-            geo=result.get("geo"),
-            device_type=result.get("device_type"),
-            quality_score=result["quality_score"],
-            grade=result["grade"],
-            ctr_score=result["ctr_score"],
-            cvr_score=result["cvr_score"],
-            bounce_score=result["bounce_score"],
-            dwell_score=result["dwell_score"],
-            interaction_score=result["interaction_score"],
-            flags=result["flags"],
-            anomaly_count=result["anomaly_count"],
+            ad_unit_id=ad_unit_id,
+            date=since,
+            quality_score=quality,
+            grade=grade,
+            ctr=ctr,
+            ctr_score=ctr_score,
+            cvr_score=cvr_score,
+            bounce_score=bounce_score,
+            dwell_score=dwell_score,
+            interaction_score=interact_score,
+            flags=flags,
+            anomaly_count=len(flags),
         )
         db.add(score)
         await db.commit()
-        await db.refresh(score)
-        return score
 
-    async def detect_anomalies(
-        self,
-        db: AsyncSession,
-        campaign_id: str | uuid.UUID,
-        hours: int = 24,
+        return result
+
+    def _detect_flags(
+        self, imps: int, clicks: int, convs: int, ctr: float, cvr: float
+    ) -> List[str]:
+        flags = []
+        if imps == 0 or clicks == 0:
+            return flags
+
+        if ctr > 0.20 or ctr < 0.0001:
+            flags.append("ctr_anomaly")
+        if cvr > 0.50:
+            flags.append("bot_suspect")
+        if imps > 0 and clicks > 0 and ctr > 0.15:
+            flags.append("suspect_bot")
+        return list(set(flags))
+
+    async def get_trend(
+        self, db: AsyncSession, ad_unit_id: uuid.UUID, days: int = 7
     ) -> List[Dict]:
-        """Generate fraud alerts from recent quality scores."""
-        since = utc_now() - timedelta(hours=hours)
+        since = datetime.now(timezone.utc) - timedelta(days=days)
         result = await db.execute(
             select(TrafficQualityScore)
-            .where(TrafficQualityScore.campaign_id == campaign_id)
-            .where(TrafficQualityScore.date >= since)
-            .order_by(TrafficQualityScore.date.desc())
-        )
-        scores = result.scalars().all()
-        alerts: List[Dict] = []
-
-        for score in scores:
-            for flag in score.flags:
-                severity = (
-                    "critical" if flag in {"bot_suspect", "ctr_anomaly"} else "warning"
-                )
-                alert = FraudAlert(
-                    campaign_id=campaign_id,
-                    alert_type=flag,
-                    severity=severity,
-                    description=(
-                        f"检测到流量异常标记: {flag}，"
-                        f"质量分 {score.quality_score}，等级 {score.grade}。"
-                    ),
-                    detected_at=utc_now(),
-                )
-                db.add(alert)
-                alerts.append(
-                    {
-                        "id": str(alert.id),
-                        "campaign_id": str(campaign_id),
-                        "alert_type": flag,
-                        "severity": severity,
-                        "description": alert.description,
-                        "detected_at": alert.detected_at.isoformat(),
-                        "status": alert.status,
-                    }
-                )
-
-        if scores and scores[0].quality_score < 50:
-            alert = FraudAlert(
-                campaign_id=campaign_id,
-                alert_type="overall_fraud_score",
-                severity="critical",
-                description=f"综合质量分低于50 ({scores[0].quality_score})，判定为作弊流量，建议立即过滤。",
-                detected_at=utc_now(),
-            )
-            db.add(alert)
-            alerts.append(
-                {
-                    "id": str(alert.id),
-                    "campaign_id": str(campaign_id),
-                    "alert_type": alert.alert_type,
-                    "severity": alert.severity,
-                    "description": alert.description,
-                    "detected_at": alert.detected_at.isoformat(),
-                    "status": alert.status,
-                }
-            )
-
-        await db.commit()
-        return alerts
-
-    async def get_campaign_quality_trend(
-        self,
-        db: AsyncSession,
-        campaign_id: str | uuid.UUID,
-        days: int = 7,
-    ) -> List[Dict]:
-        """Return daily quality scores for the past N days."""
-        since = utc_now() - timedelta(days=days)
-        result = await db.execute(
-            select(TrafficQualityScore)
-            .where(TrafficQualityScore.campaign_id == campaign_id)
+            .where(TrafficQualityScore.ad_unit_id == ad_unit_id)
             .where(TrafficQualityScore.date >= since)
             .order_by(TrafficQualityScore.date.asc())
         )
         return [
             {
-                "date": score.date.strftime("%Y-%m-%d"),
-                "quality_score": score.quality_score,
-                "grade": score.grade,
-                "ctr_score": score.ctr_score,
-                "cvr_score": score.cvr_score,
-                "bounce_score": score.bounce_score,
-                "dwell_score": score.dwell_score,
-                "interaction_score": score.interaction_score,
-                "anomaly_count": score.anomaly_count,
-                "flags": score.flags,
+                "date": s.date.strftime("%Y-%m-%d") if hasattr(s.date, "strftime") else str(s.date),
+                "quality_score": s.quality_score,
+                "grade": s.grade,
+                "ctr_score": s.ctr_score,
+                "ctr": s.ctr,
             }
-            for score in result.scalars().all()
+            for s in result.scalars().all()
         ]
 
-
-def seed_traffic_metrics(
-    campaign_id: str | uuid.UUID,
-    days: int = 7,
-    anomaly_days: int = 2,
-    rng: Optional[random.Random] = None,
-) -> List[Dict]:
-    """Generate deterministic raw traffic metrics for seeding demo alerts.
-
-    Most days are healthy; a few recent days contain bot-like signals so that
-    the fraud alert API has real records to return.
-    """
-    if rng is None:
-        rng = random.Random(42)
-
-    metrics: List[Dict] = []
-    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    for day_offset in range(days):
-        day = end - timedelta(days=days - 1 - day_offset)
-        is_anomaly = day_offset >= days - anomaly_days
-
-        impressions = rng.randint(8000, 15000)
-        if is_anomaly:
-            # Bot-like traffic: high CTR, high CVR, concentrated IP, short dwell.
-            clicks = int(impressions * rng.uniform(0.25, 0.35))
-            conversions = int(clicks * rng.uniform(0.45, 0.65))
-            bounce_count = int(clicks * rng.uniform(0.75, 0.90))
-            total_dwell_sec = int(impressions * rng.uniform(1.0, 3.0))
-            interaction_events = int(impressions * rng.uniform(0.02, 0.05))
-            unique_users = max(1, int(impressions * rng.uniform(0.02, 0.05)))
-            ip_distribution = {"192.168.1.100": int(impressions * 0.55)}
-            click_timestamps = list(range(0, 240, 2))[:120]
-            night_ratio = 0.65
-        else:
-            clicks = int(impressions * rng.uniform(0.02, 0.04))
-            conversions = int(clicks * rng.uniform(0.05, 0.15))
-            bounce_count = int(clicks * rng.uniform(0.40, 0.60))
-            total_dwell_sec = int(impressions * rng.uniform(15.0, 35.0))
-            interaction_events = int(impressions * rng.uniform(0.20, 0.35))
-            unique_users = max(1, int(impressions * rng.uniform(0.30, 0.50)))
-            ip_distribution = {}
-            click_timestamps = []
-            night_ratio = 0.25
-
-        metrics.append(
-            {
-                "campaign_id": str(campaign_id),
-                "date": day,
-                "raw_metrics": {
-                    "impressions": impressions,
-                    "clicks": clicks,
-                    "conversions": conversions,
-                    "bounce_count": bounce_count,
-                    "total_dwell_sec": total_dwell_sec,
-                    "interaction_events": interaction_events,
-                    "unique_users": unique_users,
-                    "click_timestamps": click_timestamps,
-                    "ip_distribution": ip_distribution,
-                    "night_ratio": night_ratio,
-                },
-            }
+    async def get_alerts(
+        self, db: AsyncSession, ad_unit_id: uuid.UUID, days: int = 7
+    ) -> List[Dict]:
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        result = await db.execute(
+            select(FraudAlert)
+            .where(FraudAlert.ad_unit_id == ad_unit_id)
+            .where(FraudAlert.detected_at >= since)
+            .order_by(FraudAlert.detected_at.desc())
         )
-    return metrics
+        return [
+            {
+                "id": str(a.id),
+                "alert_type": a.alert_type,
+                "severity": a.severity,
+                "description": a.description,
+                "detected_at": a.detected_at.isoformat(),
+                "status": a.status,
+            }
+            for a in result.scalars().all()
+        ]
+
+    async def generate_alerts(
+        self, db: AsyncSession, ad_unit_id: uuid.UUID
+    ) -> List[FraudAlert]:
+        """Assess and generate fraud alerts if quality is low."""
+        result = await self.assess_from_events(db, ad_unit_id)
+        alerts = []
+        if result.get("quality_score", 100) < 60:
+            alert = FraudAlert(
+                ad_unit_id=ad_unit_id,
+                alert_type="low_quality",
+                severity="warning",
+                description=f"Quality score {result['quality_score']} ({result['grade']}) for ad unit {str(ad_unit_id)[:8]}",
+            )
+            db.add(alert)
+            alerts.append(alert)
+        if result.get("quality_score", 100) < 40:
+            alert = FraudAlert(
+                ad_unit_id=ad_unit_id,
+                alert_type="overall_fraud_score",
+                severity="critical",
+                description=f"Fraud-level quality score: {result['quality_score']}",
+            )
+            db.add(alert)
+            alerts.append(alert)
+        for flag in result.get("flags", []):
+            if flag in ("ctr_anomaly", "bot_suspect"):
+                alert = FraudAlert(
+                    ad_unit_id=ad_unit_id,
+                    alert_type=flag,
+                    severity="critical",
+                    description=f"Anomaly detected: {flag}",
+                )
+                db.add(alert)
+                alerts.append(alert)
+        if alerts:
+            await db.commit()
+        return alerts
+
