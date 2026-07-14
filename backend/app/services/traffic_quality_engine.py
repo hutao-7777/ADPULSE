@@ -1,13 +1,19 @@
-"""Traffic quality scoring and fraud detection engine �� SDK platform edition."""
+"""Traffic quality scoring and fraud detection engine - SDK platform edition."""
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ClickEvent, ConversionEvent, FraudAlert, ImpressionEvent, TrafficQualityScore
+from app.models import (
+    ClickEvent,
+    ConversionEvent,
+    FraudAlert,
+    ImpressionEvent,
+    TrafficQualityScore,
+)
 
 
 class TrafficQualityEngine:
@@ -68,25 +74,40 @@ class TrafficQualityEngine:
         if since is None:
             since = datetime.now(timezone.utc) - timedelta(days=1)
 
-        imp_count = (await db.execute(
-            select(func.count(ImpressionEvent.id))
-            .where(ImpressionEvent.ad_unit_id == ad_unit_id, ImpressionEvent.created_at >= since)
-        )).scalar() or 0
+        imp_count = (
+            await db.execute(
+                select(func.count(ImpressionEvent.id)).where(
+                    ImpressionEvent.ad_unit_id == ad_unit_id,
+                    ImpressionEvent.created_at >= since,
+                )
+            )
+        ).scalar() or 0
 
-        clk_count = (await db.execute(
-            select(func.count(ClickEvent.id))
-            .where(ClickEvent.ad_unit_id == ad_unit_id, ClickEvent.created_at >= since)
-        )).scalar() or 0
+        clk_count = (
+            await db.execute(
+                select(func.count(ClickEvent.id)).where(
+                    ClickEvent.ad_unit_id == ad_unit_id, ClickEvent.created_at >= since
+                )
+            )
+        ).scalar() or 0
 
-        conv_count = (await db.execute(
-            select(func.count(ConversionEvent.id))
-            .where(ConversionEvent.ad_unit_id == ad_unit_id, ConversionEvent.created_at >= since)
-        )).scalar() or 0
+        conv_count = (
+            await db.execute(
+                select(func.count(ConversionEvent.id)).where(
+                    ConversionEvent.ad_unit_id == ad_unit_id,
+                    ConversionEvent.created_at >= since,
+                )
+            )
+        ).scalar() or 0
 
-        unique_devices = (await db.execute(
-            select(func.count(func.distinct(ImpressionEvent.device_id)))
-            .where(ImpressionEvent.ad_unit_id == ad_unit_id, ImpressionEvent.created_at >= since)
-        )).scalar() or 1
+        unique_devices = (
+            await db.execute(
+                select(func.count(func.distinct(ImpressionEvent.device_id))).where(
+                    ImpressionEvent.ad_unit_id == ad_unit_id,
+                    ImpressionEvent.created_at >= since,
+                )
+            )
+        ).scalar() or 1
 
         ctr = clk_count / imp_count if imp_count > 0 else 0.0
         cvr = conv_count / clk_count if clk_count > 0 else 0.0
@@ -94,12 +115,15 @@ class TrafficQualityEngine:
         ctr_score = self._score_ctr(ctr)
         cvr_score = self._score_cvr(cvr)
         bounce_score = self._score_bounce(0.5)  # default �� needs real bounce data
-        dwell_score = self._score_dwell(20.0)   # default �� needs real dwell data
+        dwell_score = self._score_dwell(20.0)  # default �� needs real dwell data
         interact_score = self._score_interaction(0.15)
 
         quality = (
-            ctr_score * 0.25 + cvr_score * 0.25 +
-            bounce_score * 0.2 + dwell_score * 0.15 + interact_score * 0.15
+            ctr_score * 0.25
+            + cvr_score * 0.25
+            + bounce_score * 0.2
+            + dwell_score * 0.15
+            + interact_score * 0.15
         )
         quality = round(self._clamp(quality), 2)
         grade = self._map_grade(quality)
@@ -147,7 +171,7 @@ class TrafficQualityEngine:
     def _detect_flags(
         self, imps: int, clicks: int, convs: int, ctr: float, cvr: float
     ) -> List[str]:
-        flags = []
+        flags: List[str] = []
         if imps == 0 or clicks == 0:
             return flags
 
@@ -171,7 +195,11 @@ class TrafficQualityEngine:
         )
         return [
             {
-                "date": s.date.strftime("%Y-%m-%d") if hasattr(s.date, "strftime") else str(s.date),
+                "date": (
+                    s.date.strftime("%Y-%m-%d")
+                    if hasattr(s.date, "strftime")
+                    else str(s.date)
+                ),
                 "quality_score": s.quality_score,
                 "grade": s.grade,
                 "ctr_score": s.ctr_score,
@@ -213,7 +241,10 @@ class TrafficQualityEngine:
                 ad_unit_id=ad_unit_id,
                 alert_type="low_quality",
                 severity="warning",
-                description=f"Quality score {result['quality_score']} ({result['grade']}) for ad unit {str(ad_unit_id)[:8]}",
+                description=(
+                    f"Quality score {result['quality_score']} "
+                    f"({result['grade']}) for ad unit {str(ad_unit_id)[:8]}"
+                ),
             )
             db.add(alert)
             alerts.append(alert)
@@ -239,4 +270,3 @@ class TrafficQualityEngine:
         if alerts:
             await db.commit()
         return alerts
-

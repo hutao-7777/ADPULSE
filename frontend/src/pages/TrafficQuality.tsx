@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, BarChart3, Shield, ShieldAlert, ShieldCheck, TrendingUp, Activity, Loader2 } from "lucide-react";
+import { AlertTriangle, Shield, ShieldAlert, ShieldCheck, TrendingUp, Activity, Loader2 } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import apiClient from "../lib/apiClient";
 import { cn } from "../utils/cn";
@@ -22,7 +22,6 @@ function TrafficQuality() {
   const [quality, setQuality] = useState<QualityResult | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [trend, setTrend] = useState<TrendPoint[]>([]);
-  const [loading, setLoading] = useState(false);
   const [assessing, setAssessing] = useState(false);
 
   useEffect(() => {

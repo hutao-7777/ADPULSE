@@ -1,153 +1,1 @@
-"""Attribution API �� Install matching + multi-touch comparison."""
-
-import uuid
-from typing import Optional
-
-from fastapi import Depends, Query
-from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.database import get_db
-from app.core.response import APIRouter
-from app.core.security import get_current_active_user
-from app.models import ConversionEvent, User
-from app.services.install_matcher import InstallMatcher
-
-router = APIRouter(prefix="/api/attribution", tags=["attribution"])
-matcher = InstallMatcher()
-
-
-class MatchResponse(BaseModel):
-    conversion_id: str
-    attributed_network: Optional[str]
-    model: str = "last_click"
-
-
-class MatchAllResponse(BaseModel):
-    matched: int
-    total_conversions: int
-
-
-class ReportResponse(BaseModel):
-    total_conversions: int
-    total_revenue: float
-    by_network: dict
-
-
-class CompareResponse(BaseModel):
-    conversion_id: str
-    models: dict
-
-
-class CreateConversionRequest(BaseModel):
-    device_id: str = Field(..., min_length=1)
-    event_type: str = Field(..., min_length=1)
-    event_value: float = 0.0
-    currency: str = "USD"
-    click_id: Optional[str] = None
-    impression_id: Optional[str] = None
-
-
-@router.post("/match/{conversion_id}", response_model=MatchResponse)
-async def match_conversion(
-    conversion_id: uuid.UUID,
-    model: str = Query("last_click", pattern="^(last_click|first_click)$"),
-    db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_active_user),
-):
-    """Attribution matching for a specific conversion event."""
-    cv = await db.get(ConversionEvent, conversion_id)
-    if not cv:
-        from fastapi import HTTPException
-        raise HTTPException(404, "Conversion not found")
-
-    network = await matcher.match_conversion(db, cv, model=model)
-    if network:
-        cv.attributed_network = network
-        cv.attribution_model = model
-        await db.commit()
-
-    return MatchResponse(
-        conversion_id=str(conversion_id),
-        attributed_network=network,
-        model=model,
-    )
-
-
-@router.post("/match-all", response_model=MatchAllResponse)
-async def match_all_conversions(
-    db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_active_user),
-):
-    """Match all pending unattributed conversions."""
-    # Count total pending first
-    from sqlalchemy import func, select
-    total = (await db.execute(
-        select(func.count(ConversionEvent.id))
-        .where(ConversionEvent.attributed_network.is_(None))
-    )).scalar() or 0
-
-    matched = await matcher.match_all_pending(db)
-    return MatchAllResponse(matched=matched, total_conversions=total)
-
-
-@router.get("/report", response_model=ReportResponse)
-async def attribution_report(
-    days: int = Query(7, ge=1, le=90),
-    publisher_id: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_active_user),
-):
-    """Aggregated attribution report by network."""
-    pid = uuid.UUID(publisher_id) if publisher_id else None
-    return await matcher.get_report(db, publisher_id=pid, days=days)
-
-
-@router.post("/create-and-match", response_model=MatchResponse)
-async def create_and_match(
-    body: CreateConversionRequest,
-    db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_active_user),
-):
-    """Create a conversion event and immediately run attribution matching."""
-    cv = ConversionEvent(
-        device_id=body.device_id,
-        event_type=body.event_type,
-        event_value=body.event_value,
-        currency=body.currency,
-        click_id=body.click_id,
-        impression_id=body.impression_id,
-    )
-    db.add(cv)
-    await db.flush()
-
-    network = await matcher.match_conversion(db, cv)
-    if network:
-        cv.attributed_network = network
-        cv.attribution_model = "last_click"
-    await db.commit()
-
-    return MatchResponse(
-        conversion_id=str(cv.id),
-        attributed_network=network,
-        model="last_click",
-    )
-
-
-@router.post("/compare/{conversion_id}", response_model=CompareResponse)
-async def compare_attribution_models(
-    conversion_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_active_user),
-):
-    """Run multi-touch model comparison on a conversion."""
-    cv = await db.get(ConversionEvent, conversion_id)
-    if not cv:
-        from fastapi import HTTPException
-        raise HTTPException(404, "Conversion not found")
-
-    models = await matcher.compare_models(db, cv)
-    return CompareResponse(
-        conversion_id=str(conversion_id),
-        models=models,
-    )
+"""Attribution API �� Install matching + multi-touch comparison."""import uuidfrom typing import Optionalfrom fastapi import Depends, Queryfrom pydantic import BaseModel, Fieldfrom sqlalchemy.ext.asyncio import AsyncSessionfrom app.core.database import get_dbfrom app.core.response import APIRouterfrom app.core.security import get_current_active_userfrom app.models import ConversionEvent, Userfrom app.services.install_matcher import InstallMatcherrouter = APIRouter(prefix="/api/attribution", tags=["attribution"])matcher = InstallMatcher()class MatchResponse(BaseModel):    conversion_id: str    attributed_network: Optional[str]    model: str = "last_click"class MatchAllResponse(BaseModel):    matched: int    total_conversions: intclass ReportResponse(BaseModel):    total_conversions: int    total_revenue: float    by_network: dictclass CompareResponse(BaseModel):    conversion_id: str    models: dictclass CreateConversionRequest(BaseModel):    device_id: str = Field(..., min_length=1)    event_type: str = Field(..., min_length=1)    event_value: float = 0.0    currency: str = "USD"    click_id: Optional[str] = None    impression_id: Optional[str] = None@router.post("/match/{conversion_id}", response_model=MatchResponse)async def match_conversion(    conversion_id: uuid.UUID,    model: str = Query("last_click", pattern="^(last_click|first_click)$"),    db: AsyncSession = Depends(get_db),    _user: User = Depends(get_current_active_user),):    """Attribution matching for a specific conversion event."""    cv = await db.get(ConversionEvent, conversion_id)    if not cv:        from fastapi import HTTPException        raise HTTPException(404, "Conversion not found")    network = await matcher.match_conversion(db, cv, model=model)    if network:        cv.attributed_network = network        cv.attribution_model = model        await db.commit()    return MatchResponse(        conversion_id=str(conversion_id),        attributed_network=network,        model=model,    )@router.post("/match-all", response_model=MatchAllResponse)async def match_all_conversions(    db: AsyncSession = Depends(get_db),    _user: User = Depends(get_current_active_user),):    """Match all pending unattributed conversions."""    # Count total pending first    from sqlalchemy import func, select    total = (        await db.execute(            select(func.count(ConversionEvent.id)).where(                ConversionEvent.attributed_network.is_(None)            )        )    ).scalar() or 0    matched = await matcher.match_all_pending(db)    return MatchAllResponse(matched=matched, total_conversions=total)@router.get("/report", response_model=ReportResponse)async def attribution_report(    days: int = Query(7, ge=1, le=90),    publisher_id: Optional[str] = Query(None),    db: AsyncSession = Depends(get_db),    _user: User = Depends(get_current_active_user),):    """Aggregated attribution report by network."""    pid = uuid.UUID(publisher_id) if publisher_id else None    return await matcher.get_report(db, publisher_id=pid, days=days)@router.post("/create-and-match", response_model=MatchResponse)async def create_and_match(    body: CreateConversionRequest,    db: AsyncSession = Depends(get_db),    _user: User = Depends(get_current_active_user),):    """Create a conversion event and immediately run attribution matching."""    cv = ConversionEvent(        device_id=body.device_id,        event_type=body.event_type,        event_value=body.event_value,        currency=body.currency,        click_id=body.click_id,        impression_id=body.impression_id,    )    db.add(cv)    await db.flush()    network = await matcher.match_conversion(db, cv)    if network:        cv.attributed_network = network        cv.attribution_model = "last_click"    await db.commit()    return MatchResponse(        conversion_id=str(cv.id),        attributed_network=network,        model="last_click",    )@router.post("/compare/{conversion_id}", response_model=CompareResponse)async def compare_attribution_models(    conversion_id: uuid.UUID,    db: AsyncSession = Depends(get_db),    _user: User = Depends(get_current_active_user),):    """Run multi-touch model comparison on a conversion."""    cv = await db.get(ConversionEvent, conversion_id)    if not cv:        from fastapi import HTTPException        raise HTTPException(404, "Conversion not found")    models = await matcher.compare_models(db, cv)    return CompareResponse(        conversion_id=str(conversion_id),        models=models,    )

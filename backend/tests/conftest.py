@@ -4,6 +4,7 @@ import os
 from contextlib import asynccontextmanager
 
 import httpx  # noqa: E402
+from httpx import ASGITransport  # noqa: E402
 import pytest_asyncio  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from sqlalchemy.ext.asyncio import (  # noqa: E402
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import StaticPool
 
 # Ensure required settings are present before the app configuration is imported.
 os.environ.setdefault(
@@ -19,7 +21,18 @@ os.environ.setdefault(
 os.environ.setdefault("ENABLE_PUBLIC_REGISTRATION", "true")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-from app.api import auth, dashboard  # noqa: E402
+from app.api import (  # noqa: E402
+    ad_units,
+    attribution,
+    auth,
+    bidding,
+    dashboard,
+    events,
+    publishers,
+    report,
+    sdk_config,
+    traffic,
+)
 from app.core.config import settings  # noqa: E402
 from app.core.database import Base, get_db  # noqa: E402
 from app.core.response import register_exception_handlers  # noqa: E402
@@ -37,6 +50,7 @@ async def client():
         "sqlite+aiosqlite:///:memory:",
         future=True,
         echo=False,
+        poolclass=StaticPool,
     )
     TestSessionLocal = async_sessionmaker(
         test_engine,
@@ -66,22 +80,19 @@ async def client():
     test_app = FastAPI(lifespan=lifespan)
     register_exception_handlers(test_app)
     test_app.include_router(auth.router)
+    test_app.include_router(publishers.router)
+    test_app.include_router(ad_units.router)
+    test_app.include_router(events.router)
+    test_app.include_router(bidding.router)
+    test_app.include_router(sdk_config.router)
     test_app.include_router(attribution.router)
     test_app.include_router(traffic.router)
-    test_app.include_router(rtb.router)
-    test_app.include_router(campaigns.router)
+    test_app.include_router(report.router)
     test_app.include_router(dashboard.router)
-    test_app.include_router(agent.router)
     test_app.dependency_overrides[get_db] = override_get_db
 
-    # Agent tools open their own sessions via AsyncSessionLocal; redirect them
-    # to the in-memory test database so tests do not depend on adpulse.db.
-    import app.agent.tools as tools_module
-
-    tools_module.AsyncSessionLocal = TestSessionLocal
-
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=test_app),
+        transport=ASGITransport(app=test_app),
         base_url="http://test",
         timeout=httpx.Timeout(60.0),
     ) as ac:
@@ -89,4 +100,3 @@ async def client():
 
     await test_engine.dispose()
     test_app.dependency_overrides.clear()
-

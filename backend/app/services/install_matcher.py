@@ -1,9 +1,9 @@
-"""Install attribution matching engine �� click-to-install matching + multi-touch."""
+"""Install attribution matching engine - click-to-install matching + multi-touch."""
 
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +15,7 @@ class InstallMatcher:
     """Match conversion/install events to click/impression events for attribution."""
 
     DEFAULT_CLICK_WINDOW_HOURS = 168  # 7 days
-    DEFAULT_VIEW_WINDOW_HOURS = 24    # 1 day
+    DEFAULT_VIEW_WINDOW_HOURS = 24  # 1 day
 
     async def match_conversion(
         self,
@@ -25,7 +25,9 @@ class InstallMatcher:
         view_window_hours: int = DEFAULT_VIEW_WINDOW_HOURS,
         model: str = "last_click",
     ) -> Optional[str]:
-        """Match a conversion to clicks/impressions and return the attributed network name."""
+        """Match a conversion to clicks/impressions and return the attributed
+        network name.
+        """
         device_id = conversion.device_id
         if not device_id:
             return None
@@ -79,8 +81,7 @@ class InstallMatcher:
     ) -> int:
         """Match all unattributed conversions."""
         result = await db.execute(
-            select(ConversionEvent)
-            .where(ConversionEvent.attributed_network.is_(None))
+            select(ConversionEvent).where(ConversionEvent.attributed_network.is_(None))
         )
         conversions: List[ConversionEvent] = list(result.scalars().all())
         matched = 0

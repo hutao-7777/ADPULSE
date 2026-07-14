@@ -47,7 +47,9 @@ class ConversionPayload(BaseModel):
 
 
 @router.post("/events/impression", status_code=status.HTTP_204_NO_CONTENT)
-async def track_impression(body: ImpressionPayload, request: Request, db: AsyncSession = Depends(get_db)):
+async def track_impression(
+    body: ImpressionPayload, request: Request, db: AsyncSession = Depends(get_db)
+):
     event = ImpressionEvent(
         impression_id=body.impression_id,
         ad_unit_id=uuid.UUID(body.ad_unit_id) if body.ad_unit_id else None,
@@ -102,7 +104,9 @@ async def track_batch(events: list[dict], db: AsyncSession = Depends(get_db)):
         if etype == "impression":
             ie = ImpressionEvent(
                 impression_id=ev.get("impression_id", ""),
-                ad_unit_id=uuid.UUID(ev["ad_unit_id"]) if ev.get("ad_unit_id") else None,
+                ad_unit_id=(
+                    uuid.UUID(ev["ad_unit_id"]) if ev.get("ad_unit_id") else None
+                ),
                 device_id=ev.get("device_id"),
                 network_name=ev.get("network_name"),
                 revenue=ev.get("revenue", 0.0),
@@ -113,7 +117,9 @@ async def track_batch(events: list[dict], db: AsyncSession = Depends(get_db)):
             ce = ClickEvent(
                 click_id=ev.get("click_id", ""),
                 impression_id=ev.get("impression_id"),
-                ad_unit_id=uuid.UUID(ev["ad_unit_id"]) if ev.get("ad_unit_id") else None,
+                ad_unit_id=(
+                    uuid.UUID(ev["ad_unit_id"]) if ev.get("ad_unit_id") else None
+                ),
                 device_id=ev.get("device_id"),
                 network_name=ev.get("network_name"),
                 redirect_url=ev.get("redirect_url"),

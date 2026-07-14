@@ -259,5 +259,3 @@ async def rate_limit_api_key(
         )
     _api_key_rate_limit_state[key] = current
     return key_record
-
-

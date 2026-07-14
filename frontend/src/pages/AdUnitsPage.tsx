@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Layers, Plus, Loader2, Zap, X, ChevronDown, ChevronRight, GripVertical, Save, Trash2, Pencil } from "lucide-react";
+import { Layers, Plus, Loader2, Zap, ChevronDown, ChevronRight } from "lucide-react";
 import apiClient from "../lib/apiClient";
 import toast from "react-hot-toast";
 import { cn } from "../utils/cn";
@@ -65,8 +65,6 @@ function AdUnitsPage() {
       ) : (
         <div className="space-y-3">{adUnits.map((au) => {
           const srcs = sources[au.id] || [];
-          const waterfall = srcs.filter((s) => !s.bidding_endpoint);
-          const bidding = srcs.filter((s) => s.bidding_endpoint);
           return (
           <div key={au.id} className="card overflow-hidden">
             <button onClick={() => { setExpanded((p) => ({ ...p, [au.id]: !p[au.id] })); fetchSources(au.id); }}

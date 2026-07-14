@@ -22,11 +22,11 @@ export const useAuthStore = create<AuthState>()(() => ({
   isAuthenticated: true,
 
   fetchUser: async () => {
-    try { const r = await apiClient.get("/api/auth/me"); useAuthStore.setState({ user: r.data }); } catch {}
+    try { const r = await apiClient.get("/api/auth/me"); useAuthStore.setState({ user: r.data }); } catch { /* no-op */ }
   },
 
   fetchApiKeys: async () => {
-    try { const r = await apiClient.get("/api/auth/api-keys"); useAuthStore.setState({ apiKeys: r.data }); } catch {}
+    try { const r = await apiClient.get("/api/auth/api-keys"); useAuthStore.setState({ apiKeys: r.data }); } catch { /* no-op */ }
   },
 
   createApiKey: async (name: string) => {
@@ -44,4 +44,5 @@ export const useAuthStore = create<AuthState>()(() => ({
   logout: () => {},
 }));
 
-export default useAuthStore;
+export default useAuthStore;
+

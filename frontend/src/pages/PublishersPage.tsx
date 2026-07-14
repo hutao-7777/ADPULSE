@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Building2, Globe, Plus, Smartphone, Loader2, X, ChevronDown, ChevronRight } from "lucide-react";
+import { Building2, Plus, Smartphone, Loader2, X, ChevronDown, ChevronRight } from "lucide-react";
 import apiClient from "../lib/apiClient";
 import toast from "react-hot-toast";
 import { cn } from "../utils/cn";

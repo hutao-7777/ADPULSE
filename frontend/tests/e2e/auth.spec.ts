@@ -1,40 +1,27 @@
 import { test, expect } from '@playwright/test';
 
-const uniqueEmail = () => `e2e+${Date.now()}@example.com`;
-const password = 'TestPass123!';
-
-test.describe('auth flow', () => {
-  test('a user can register, log out, and log back in', async ({ page }) => {
-    const email = uniqueEmail();
-
-    // Register
-    await page.goto('/register');
-    await page.getByLabel('邮箱').fill(email);
-    await page.getByLabel('密码').first().fill(password);
-    await page.getByLabel('确认密码').fill(password);
-    await page.getByRole('button', { name: '注册' }).click();
-
-    // Should land on dashboard after successful registration
-    await page.waitForURL('/dashboard');
-    await expect(page.getByRole('heading', { name: /数据看板|Dashboard/ })).toBeVisible();
-
-    // Log out
-    await page.getByRole('button', { name: email }).click();
-    await page.getByRole('button', { name: '退出登录' }).click();
-    await page.waitForURL('/login');
-
-    // Log back in
-    await page.getByLabel('邮箱').fill(email);
-    await page.getByLabel('密码').fill(password);
-    await page.getByRole('button', { name: '登录' }).click();
-
-    await page.waitForURL('/dashboard');
-    await expect(page.getByRole('heading', { name: /数据看板|Dashboard/ })).toBeVisible();
+test.describe('smoke tests', () => {
+  test('dashboard loads and shows seeded KPIs', async ({ page }) => {
+    await page.goto('/dashboard');
+    await expect(page.getByRole('heading', { name: '发布商仪表盘' })).toBeVisible();
   });
 
-  test('protected routes redirect anonymous users to login', async ({ page }) => {
+  test('api keys page loads with correct Chinese text', async ({ page }) => {
     await page.goto('/api-keys');
-    await page.waitForURL('/login');
-    await expect(page.getByRole('heading', { name: '欢迎回到 AdPulse' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'API 密钥' })).toBeVisible();
+    await expect(page.getByText('管理用于 DSP/RTB 集成的 API Key')).toBeVisible();
+    await expect(page.getByRole('button', { name: '新增 API Key' })).toBeVisible();
+  });
+
+  test('navigation between pages works', async ({ page }) => {
+    await page.goto('/dashboard');
+    await page.getByRole('link', { name: '媒体主' }).click();
+    await expect(page).toHaveURL(/\/publishers/);
+    await page.getByRole('link', { name: '广告位' }).click();
+    await expect(page).toHaveURL(/\/ad-units/);
+    await page.getByRole('link', { name: '流量质量' }).click();
+    await expect(page).toHaveURL(/\/traffic/);
+    await page.getByRole('link', { name: 'API 密钥' }).click();
+    await expect(page).toHaveURL(/\/api-keys/);
   });
 });

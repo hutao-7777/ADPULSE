@@ -13,17 +13,17 @@ def _unwrap(resp) -> dict[str, Any]:
     return cast(dict[str, Any], resp.json()["data"])
 
 
-async def _login_admin(client) -> dict:
+async def _login_demo(client) -> dict:
     resp = await client.post(
         "/api/auth/login",
-        json={"email": "admin@example.com", "password": "admin123"},
+        json={"email": "demo@adpulse.com", "password": "demo123456"},
     )
     assert resp.status_code == 200
     return _unwrap(resp)
 
 
 async def test_auth_login_and_profile(client):
-    tokens = await _login_admin(client)
+    tokens = await _login_demo(client)
     assert "access_token" in tokens
     assert tokens["token_type"] == "bearer"
 
@@ -32,11 +32,11 @@ async def test_auth_login_and_profile(client):
         headers={"Authorization": f"Bearer {tokens['access_token']}"},
     )
     assert me.status_code == 200
-    assert _unwrap(me)["email"] == "admin@example.com"
+    assert _unwrap(me)["email"] == "demo@adpulse.com"
 
 
 async def test_auth_register_refresh_and_api_keys(client):
-    admin = await _login_admin(client)
+    admin = await _login_demo(client)
     admin_token = admin["access_token"]
 
     register = await client.post(
